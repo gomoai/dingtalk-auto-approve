@@ -195,6 +195,9 @@ LAUNCHD_LABEL=com.gomoai.dingtalk-auto-approve
 
 # 兜底监控阈值（分钟）
 ALERT_THRESHOLD_MIN=5
+
+# 兜底监控是否自动补审批；设为 false 时只告警
+BACKUP_AUTO_APPROVE=true
 EOF
     log ".env 模板已生成，请编辑填入凭证和审批配置"
 fi
@@ -213,6 +216,7 @@ write_env_from_var "ALERT_WEBHOOK_URL"
 write_env_from_var "SERVICE_NAME"
 write_env_from_var "LAUNCHD_LABEL"
 write_env_from_var "ALERT_THRESHOLD_MIN"
+write_env_from_var "BACKUP_AUTO_APPROVE"
 
 if [ "${OPENCLAW_AUTO:-0}" = "1" ] || [ ! -t 0 ]; then
     log "已按环境变量写入配置，跳过交互输入"

@@ -16,7 +16,7 @@ OpenClaw/Agent 会读取 `SKILL.md`，询问必要参数，然后自动部署后
 - 对符合条件的审批单自动通过
 - 记录已处理审批单，避免重复处理
 - 发送审批结果和异常告警
-- 支持健康监控和兜底监控
+- 支持健康监控和兜底自动审批
 - 支持 macOS `launchd` 和 Linux `systemd`
 
 ## 目录关系
@@ -102,6 +102,6 @@ Linux：
 - `scripts/approval_bot.py`: 钉钉审批机器人
 - `scripts/setup.sh`: 后台服务部署脚本
 - `scripts/monitor.sh`: 健康监控
-- `scripts/monitor-backup.sh`: 兜底监控
+- `scripts/monitor-backup.sh`: 兜底自动审批，处理早于 bot 启动时间的存量 RUNNING 审批单
 - `references/config-template.env`: 配置模板
 - `references/dingtalk-permissions.md`: 钉钉权限说明

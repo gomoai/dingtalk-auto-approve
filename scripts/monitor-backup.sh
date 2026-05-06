@@ -24,6 +24,7 @@ PROCESS_CODE = os.environ.get("TARGET_PROCESS_CODE", "")
 TARGET_SYSTEM_SOURCE = os.environ.get("TARGET_SYSTEM_SOURCE", "AI工具账号")
 STATE_FILE = os.environ.get("STATE_FILE", os.path.join(SCRIPT_DIR, ".approved_state.json"))
 ALERT_THRESHOLD_MIN = int(os.environ.get("ALERT_THRESHOLD_MIN", "5") or "5")
+BACKUP_AUTO_APPROVE = os.environ.get("BACKUP_AUTO_APPROVE", "true").lower() in ("1", "true", "yes", "y")
 ACTIONER_USER_ID = os.environ.get("ACTIONER_USER_ID", "")
 NOTIFY_USER_ID = os.environ.get("NOTIFY_USER_ID", "")
 AGENT_ID = int(os.environ.get("DINGTALK_AGENT_ID", "0") or "0")
@@ -98,6 +99,70 @@ def get_instance_detail(token, instance_id):
         result = json.loads(resp.read().decode())
         return result.get("process_instance", {})
 
+def execute_approve(token, instance_id, task_id=None):
+    """兜底执行审批同意，与 Stream bot 使用同一个新版审批执行 API。"""
+    body = {
+        "processInstanceId": instance_id,
+        "remark": "兜底自动通过",
+        "result": "agree",
+        "actionerUserId": ACTIONER_USER_ID,
+    }
+    if task_id:
+        body["taskId"] = task_id
+    return post_json(
+        "https://api.dingtalk.com/v1.0/workflow/processInstances/execute",
+        body,
+        headers={
+            "x-acs-dingtalk-access-token": token,
+            "Content-Type": "application/json",
+        },
+    )
+
+def is_approve_success(result):
+    if result.get("success") is True:
+        return True
+    if result.get("result") is True:
+        return True
+    if result.get("errcode") == 0:
+        return True
+    if "success" in result and result["success"] is not False:
+        return True
+    return False
+
+def find_task_id(value):
+    """从审批详情里尽量提取当前审批任务 taskId；找不到时新版 API 仍可尝试不带 taskId。"""
+    if isinstance(value, dict):
+        for key in ("taskId", "task_id", "activityId"):
+            task_id = value.get(key)
+            if task_id:
+                try:
+                    return int(task_id)
+                except (TypeError, ValueError):
+                    return None
+        for child in value.values():
+            task_id = find_task_id(child)
+            if task_id:
+                return task_id
+    elif isinstance(value, list):
+        for child in value:
+            task_id = find_task_id(child)
+            if task_id:
+                return task_id
+    return None
+
+def parse_form_summary(form_values):
+    lines = []
+    for item in form_values:
+        name = item.get("name", "")
+        value = item.get("value", "")
+        if isinstance(value, list):
+            value = ", ".join(str(v) for v in value if v)
+        elif isinstance(value, dict):
+            value = json.dumps(value, ensure_ascii=False)
+        if name and value:
+            lines.append(f"{name}: {value}")
+    return "\n".join(lines) if lines else "无详细内容"
+
 def get_form_field(form_values, field_name):
     for item in form_values:
         if item.get("name") == field_name:
@@ -141,6 +206,9 @@ def send_alert(token, message):
 if not PROCESS_CODE:
     print("ERROR: 请配置 TARGET_PROCESS_CODE")
     sys.exit(1)
+if BACKUP_AUTO_APPROVE and not ACTIONER_USER_ID:
+    print("ERROR: 兜底自动审批需要配置 ACTIONER_USER_ID")
+    sys.exit(1)
 
 token = get_token()
 if not token:
@@ -155,7 +223,9 @@ start_ts = int((now - 604800) * 1000)
 end_ts = int(now * 1000)
 
 instances = get_instances(token, start_ts, end_ts)
-stuck = []
+failed = []
+alert_only = []
+approved_by_backup = []
 
 for inst_id in instances:
     # 已自动通过的跳过
@@ -199,28 +269,68 @@ for inst_id in instances:
         wait_minutes = 0
 
     if wait_minutes >= ALERT_THRESHOLD_MIN:
-        stuck.append({
+        item = {
             "instance_id": inst_id,
             "title": title,
             "applicant": applicant,
             "system_source": system_source,
             "wait_minutes": wait_minutes,
             "create_time": create_time_str,
-        })
+            "form_summary": parse_form_summary(form_values),
+            "task_id": find_task_id(detail),
+        }
+        if not BACKUP_AUTO_APPROVE:
+            alert_only.append(item)
+            continue
 
-if stuck:
-    alert_lines = ["审批兜底告警：发现未自动通过的审批单\n"]
-    for s in stuck:
+        try:
+            result = execute_approve(token, inst_id, task_id=item["task_id"])
+            item["approve_result"] = result
+            if is_approve_success(result):
+                save_approved(inst_id, applicant, "兜底自动")
+                approved_by_backup.append(item)
+            else:
+                failed.append(item)
+        except Exception as exc:
+            item["approve_error"] = str(exc)
+            failed.append(item)
+
+if approved_by_backup:
+    notify_lines = ["审批兜底自动通过成功\n"]
+    for s in approved_by_backup:
+        notify_lines.append(f"审批标题: {s['title']}")
+        notify_lines.append(f"申请人: {s['applicant']}")
+        notify_lines.append(f"审批单号: {s['instance_id']}")
+        notify_lines.append(f"已等待时长: {s['wait_minutes']} 分钟")
+        notify_lines.append("")
+    notify_msg = "\n".join(notify_lines)
+    print(notify_msg)
+    try:
+        send_alert(token, notify_msg)
+    except Exception as exc:
+        print(f"WARN: 成功通知发送失败: {exc}")
+
+pending_alerts = failed if BACKUP_AUTO_APPROVE else alert_only
+if pending_alerts:
+    title = "审批兜底告警：自动通过失败\n" if BACKUP_AUTO_APPROVE else "审批兜底告警：发现未自动通过的审批单\n"
+    alert_lines = [title]
+    for s in pending_alerts:
         alert_lines.append(f"审批标题: {s['title']}")
         alert_lines.append(f"申请人: {s['applicant']}")
         alert_lines.append(f"审批单号: {s['instance_id']}")
         alert_lines.append(f"系统来源: {s['system_source']}")
         alert_lines.append(f"已等待时长: {s['wait_minutes']} 分钟")
         alert_lines.append(f"创建时间: {s['create_time']}")
+        if s.get("task_id"):
+            alert_lines.append(f"任务ID: {s['task_id']}")
+        if s.get("approve_result"):
+            alert_lines.append(f"审批 API 返回: {json.dumps(s['approve_result'], ensure_ascii=False)}")
+        if s.get("approve_error"):
+            alert_lines.append(f"异常信息: {s['approve_error']}")
         alert_lines.append("")
     
     alert_lines.append("请检查：")
-    alert_lines.append("1. bot 是否正常运行: systemctl status dingtalk-bot")
+    alert_lines.append("1. bot 是否正常运行")
     alert_lines.append("2. bot 日志: tail bot.log")
     alert_lines.append("3. 如需手动处理，请在钉钉审批中操作")
     

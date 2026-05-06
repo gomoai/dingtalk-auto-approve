@@ -2,9 +2,9 @@
 name: dingtalk-auto-approve
 description: >
   OpenClaw 钉钉审批自动通过技能。指导 Agent 部署和维护一个钉钉 Stream 审批机器人，
-  监听审批事件，对符合条件的审批单自动通过，并附带进程守护、健康监控、兜底告警。
+  监听审批事件，对符合条件的审批单自动通过，并附带进程守护、健康监控、兜底自动审批。
   使用场景：(1) 自动通过特定钉钉审批流（如账号权限申请单）(2) 监控审批机器人运行状态
-  (3) 兜底检查卡住的审批单并告警 (4) 一键安装部署整套服务。
+  (3) 兜底检查并自动处理卡住的审批单 (4) 一键安装部署整套服务。
   触发词：钉钉审批自动通过、钉钉审批机器人、自动审批、审批流自动化、钉钉审批监控。
 ---
 
@@ -44,6 +44,7 @@ NOTIFY_USER_ID=接收通知的用户 userId
 TARGET_SYSTEM_SOURCE=AI工具账号
 ALERT_CHANNEL=dingtalk
 ALERT_THRESHOLD_MIN=5
+BACKUP_AUTO_APPROVE=true
 SERVICE_NAME=dingtalk-bot.service
 LAUNCHD_LABEL=com.gomoai.dingtalk-auto-approve
 ```
@@ -160,6 +161,7 @@ launchctl kickstart -k gui/$(id -u)/com.gomoai.dingtalk-auto-approve
 python3 -m py_compile ~/dingtalk-auto-approve/approval_bot.py
 tail -n 50 ~/dingtalk-auto-approve/bot.log
 bash ~/dingtalk-auto-approve/monitor.sh
+bash ~/dingtalk-auto-approve/monitor-backup.sh
 ```
 
 Linux 额外检查：
@@ -238,6 +240,22 @@ TARGET_SYSTEM_SOURCE=AI工具账号
 3. 幂等去重（`.approved_state.json` 中已记录）
 4. 当前审批人 == `ACTIONER_USER_ID`
 5. 表单字段"系统来源" == `TARGET_SYSTEM_SOURCE`
+
+### 兜底自动审批
+
+`monitor-backup.sh` 每 15 分钟查询最近 7 天的目标审批流实例。对满足以下条件的审批单，会自动补执行同意：
+
+1. 审批单仍是 `RUNNING`
+2. 未出现在 `.approved_state.json`
+3. 表单字段"系统来源" == `TARGET_SYSTEM_SOURCE`
+4. 不是 `ACTIONER_USER_ID` 已手动同意过的单子
+5. 等待时长 >= `ALERT_THRESHOLD_MIN`
+
+默认 `BACKUP_AUTO_APPROVE=true`，因此早于 bot 启动时间的存量 RUNNING 单也会被兜底处理。若只想告警不自动审批，在 `.env` 中设置：
+
+```env
+BACKUP_AUTO_APPROVE=false
+```
 
 ### 增加新的自动通过条件
 
