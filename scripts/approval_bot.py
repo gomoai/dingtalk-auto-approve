@@ -28,6 +28,7 @@ import logging
 from typing import Tuple
 from pathlib import Path
 from urllib import request as urllib_req
+from urllib import error as urllib_error
 import urllib.parse
 
 import dingtalk_stream
@@ -207,8 +208,12 @@ def api_execute_approve(access_token: str, process_instance_id: str,
         "x-acs-dingtalk-access-token": access_token,
         "Content-Type": "application/json"
     }, method="POST")
-    with urllib_req.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib_req.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib_error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"审批执行 API 失败: HTTP {exc.code} {exc.reason}: {error_body}") from exc
 
 
 def api_send_work_notification(access_token: str, agent_id: int, 
@@ -338,7 +343,7 @@ class ApprovalAutoApproveHandler(dingtalk_stream.EventHandler):
         bpms_type = data.get("type", "")
         title = data.get("title", "")
         current_approver = data.get("userId", data.get("userid", ""))
-        task_id = data.get("taskId", data.get("task_id", data.get("activityId")))
+        task_id = data.get("taskId", data.get("taskid", data.get("task_id", data.get("activityId"))))
         # taskId 可能是字符串或整数，API 需要整数
         if task_id:
             try:

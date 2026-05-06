@@ -15,7 +15,7 @@ LOGFILE="$SCRIPT_DIR/monitor-backup.log"
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$LOGFILE"; }
 
 SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
-import urllib.request, json, urllib.parse, time, sys, os
+import urllib.error, urllib.request, json, urllib.parse, time, sys, os
 from datetime import datetime
 
 TOKEN_URL = f"https://oapi.dingtalk.com/gettoken?appkey={os.environ.get('DINGTALK_APP_KEY','')}&appsecret={os.environ.get('DINGTALK_APP_SECRET','')}"
@@ -36,8 +36,12 @@ OS_NAME = os.uname().sysname if hasattr(os, "uname") else ""
 def post_json(url, body, headers=None):
     data = json.dumps(body, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers or {"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"HTTP {exc.code} {exc.reason}: {error_body}") from exc
 
 def get_token():
     if not os.environ.get("DINGTALK_APP_KEY") or not os.environ.get("DINGTALK_APP_SECRET"):
@@ -133,11 +137,14 @@ def is_approve_success(result):
     return False
 
 def find_task_id(value):
-    """从审批详情里尽量提取当前审批任务 taskId；找不到时新版 API 仍可尝试不带 taskId。"""
+    """从审批详情里尽量提取当前 RUNNING 任务的 taskId。"""
     if isinstance(value, dict):
-        for key in ("taskId", "task_id", "activityId"):
+        status = str(value.get("status", value.get("taskStatus", value.get("state", "")))).upper()
+        result = str(value.get("result", value.get("operation_result", ""))).upper()
+        looks_running = status in ("RUNNING", "NEW", "TODO", "PENDING") or result in ("", "NONE")
+        for key in ("taskId", "taskid", "task_id", "activityId", "activity_id"):
             task_id = value.get(key)
-            if task_id:
+            if task_id and looks_running:
                 try:
                     return int(task_id)
                 except (TypeError, ValueError):
