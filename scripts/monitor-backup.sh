@@ -29,6 +29,9 @@ ACTIONER_USER_ID = os.environ.get("ACTIONER_USER_ID", "")
 NOTIFY_USER_ID = os.environ.get("NOTIFY_USER_ID", "")
 AGENT_ID = int(os.environ.get("DINGTALK_AGENT_ID", "0") or "0")
 ALERT_CHANNEL = os.environ.get("ALERT_CHANNEL", "dingtalk").lower()
+SERVICE_NAME = os.environ.get("SERVICE_NAME", "dingtalk-bot.service")
+LAUNCHD_LABEL = os.environ.get("LAUNCHD_LABEL", "com.gomoai.dingtalk-auto-approve")
+OS_NAME = os.uname().sysname if hasattr(os, "uname") else ""
 
 def post_json(url, body, headers=None):
     data = json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -169,6 +172,43 @@ def get_form_field(form_values, field_name):
             return str(item.get("value", ""))
     return ""
 
+def extract_applicant(detail, form_values, title):
+    """尽量从不同钉钉返回格式里提取申请人名称。"""
+    for key in ("originator_name", "originator_user_name", "originatorUserName"):
+        value = detail.get(key)
+        if value:
+            return str(value)
+
+    for field_name in ("申请人", "姓名", "提交人", "申请姓名", "用户姓名"):
+        value = get_form_field(form_values, field_name)
+        if value:
+            return value
+
+    if "提交的" in title:
+        name = title.split("提交的", 1)[0].strip()
+        if name:
+            return name
+
+    for key in ("originator_userid", "originatorUserId", "userid", "userId"):
+        value = detail.get(key)
+        if value:
+            return str(value)
+
+    return "未知"
+
+def append_check_lines(lines):
+    lines.append("请检查：")
+    lines.append("1. ACTIONER_USER_ID 是否仍是该审批单当前审批人")
+    lines.append("2. 钉钉应用是否已开通 qyapi_aflow_execute 权限")
+    lines.append("3. 审批 API 返回信息 / 异常信息")
+    lines.append(f"4. bot 日志: tail {os.path.join(SCRIPT_DIR, 'bot.log')}")
+    lines.append(f"5. 兜底日志: tail {os.path.join(SCRIPT_DIR, 'monitor-backup.log')}")
+    if OS_NAME == "Darwin":
+        lines.append(f"6. 服务状态: launchctl print gui/$(id -u)/{LAUNCHD_LABEL}")
+    else:
+        lines.append(f"6. 服务状态: systemctl status {SERVICE_NAME}")
+    lines.append("7. 如需手动处理，请在钉钉审批中操作")
+
 def is_manually_approved(detail):
     """检查审批单是否已被当前用户手动通过
     
@@ -243,8 +283,8 @@ for inst_id in instances:
 
     form_values = detail.get("form_component_values", [])
     system_source = get_form_field(form_values, "系统来源")
-    applicant = detail.get("originator_name", "未知")
     title = detail.get("title", "")
+    applicant = extract_applicant(detail, form_values, title)
     create_time_str = detail.get("create_time", "")
 
     # 过滤：只检查指定系统来源的审批单
@@ -312,7 +352,7 @@ if approved_by_backup:
 
 pending_alerts = failed if BACKUP_AUTO_APPROVE else alert_only
 if pending_alerts:
-    title = "审批兜底告警：自动通过失败\n" if BACKUP_AUTO_APPROVE else "审批兜底告警：发现未自动通过的审批单\n"
+    title = "审批兜底告警：自动通过失败\n" if BACKUP_AUTO_APPROVE else "审批兜底告警：仅告警模式发现未处理审批单\n"
     alert_lines = [title]
     for s in pending_alerts:
         alert_lines.append(f"审批标题: {s['title']}")
@@ -329,10 +369,7 @@ if pending_alerts:
             alert_lines.append(f"异常信息: {s['approve_error']}")
         alert_lines.append("")
     
-    alert_lines.append("请检查：")
-    alert_lines.append("1. bot 是否正常运行")
-    alert_lines.append("2. bot 日志: tail bot.log")
-    alert_lines.append("3. 如需手动处理，请在钉钉审批中操作")
+    append_check_lines(alert_lines)
     
     alert_msg = "\n".join(alert_lines)
     print(alert_msg)

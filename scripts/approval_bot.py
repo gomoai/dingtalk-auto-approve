@@ -241,6 +241,31 @@ def get_form_field(form_values: list, field_name: str) -> str:
     return ""
 
 
+def extract_applicant(instance: dict, form_values: list, title: str) -> str:
+    """尽量从不同钉钉返回格式里提取申请人名称。"""
+    for key in ("originator_name", "originator_user_name", "originatorUserName"):
+        value = instance.get(key)
+        if value:
+            return str(value)
+
+    for field_name in ("申请人", "姓名", "提交人", "申请姓名", "用户姓名"):
+        value = get_form_field(form_values, field_name)
+        if value:
+            return value
+
+    if "提交的" in title:
+        name = title.split("提交的", 1)[0].strip()
+        if name:
+            return name
+
+    for key in ("originator_userid", "originatorUserId", "userid", "userId"):
+        value = instance.get(key)
+        if value:
+            return str(value)
+
+    return "未知"
+
+
 def parse_form_summary(form_values: list) -> str:
     """将审批表单内容解析为可读文本"""
     lines = []
@@ -353,8 +378,8 @@ class ApprovalAutoApproveHandler(dingtalk_stream.EventHandler):
             return AckMessage.STATUS_OK, "OK"
 
         form_values = instance.get("form_component_values", [])
-        applicant = instance.get("originator_name", "未知")
         system_source = get_form_field(form_values, "系统来源")
+        applicant = extract_applicant(instance, form_values, title)
         form_summary = parse_form_summary(form_values)
 
         # ── 过滤5：系统来源必须是"AI工具账号" ──
