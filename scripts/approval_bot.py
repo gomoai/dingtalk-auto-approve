@@ -6,9 +6,9 @@
 
 判断逻辑（5 层过滤 → 执行 → 通知）：
   过滤1：processCode == 目标审批流
-  过滤2：status == RUNNING 且 type == start
+  过滤2：事件类型 == start，若事件携带 status 则要求 status == RUNNING
   过滤3：幂等去重（instanceId 不重复处理，持久化存储）
-  过滤4：审批人 userId == 当前用户
+  过滤4：审批人 userId/staffId == 当前用户
   过滤5：表单字段「系统来源」== "AI工具账号"
 
 API 使用：
@@ -286,6 +286,25 @@ def parse_form_summary(form_values: list) -> str:
     return "\n".join(lines) if lines else "无详细内容"
 
 
+def get_first_value(data: dict, *keys: str) -> str:
+    """按多个可能字段名取第一个非空值。"""
+    for key in keys:
+        value = data.get(key)
+        if value not in (None, ""):
+            return value
+    return ""
+
+
+def normalize_event_data(event_data: dict) -> dict:
+    """兼容钉钉 Stream 事件顶层 payload 和 data 嵌套 payload。"""
+    if isinstance(event_data.get("data"), dict):
+        nested = event_data["data"]
+        merged = dict(event_data)
+        merged.update(nested)
+        return merged
+    return event_data
+
+
 # ============================================================
 # 事件处理器
 # ============================================================
@@ -335,15 +354,15 @@ class ApprovalAutoApproveHandler(dingtalk_stream.EventHandler):
         if event_type != "bpms_task_change":
             return AckMessage.STATUS_OK, "OK"
 
-        event_data = event.data
-        data = event_data.get("data", {})
-        process_code = data.get("processCode", "")
-        status = data.get("status", "")
-        instance_id = data.get("processInstanceId", "")
-        bpms_type = data.get("type", "")
-        title = data.get("title", "")
-        current_approver = data.get("userId", data.get("userid", ""))
-        task_id = data.get("taskId", data.get("taskid", data.get("task_id", data.get("activityId"))))
+        event_data = event.data or {}
+        data = normalize_event_data(event_data)
+        process_code = get_first_value(data, "processCode", "process_code")
+        status = get_first_value(data, "status", "processInstanceStatus")
+        instance_id = get_first_value(data, "processInstanceId", "process_instance_id")
+        bpms_type = get_first_value(data, "type", "eventType", "event_type")
+        title = get_first_value(data, "title", "processInstanceTitle")
+        current_approver = get_first_value(data, "userId", "userid", "staffId", "staffid", "staff_id")
+        task_id = get_first_value(data, "taskId", "taskid", "task_id", "activityId", "activity_id")
         # taskId 可能是字符串或整数，API 需要整数
         if task_id:
             try:
@@ -353,15 +372,17 @@ class ApprovalAutoApproveHandler(dingtalk_stream.EventHandler):
 
         self.logger.info(
             "审批事件 | %s | 流程=%s | 标题=%s | 状态=%s | 审批人=%s | 实例=%s",
-            bpms_type, process_code, title, status, current_approver, instance_id,
+            bpms_type, process_code, title, status or "未提供", current_approver, instance_id,
         )
 
         # ── 过滤1：目标审批流 ──
         if process_code != TARGET_PROCESS_CODE:
             return AckMessage.STATUS_OK, "OK"
 
-        # ── 过滤2：只处理 RUNNING + start ──
-        if status != "RUNNING" or bpms_type != "start":
+        # ── 过滤2：只处理 start；如果事件携带状态，则要求 RUNNING ──
+        if bpms_type != "start":
+            return AckMessage.STATUS_OK, "OK"
+        if status and status != "RUNNING":
             return AckMessage.STATUS_OK, "OK"
 
         # ── 过滤3：幂等去重（持久化） ──
@@ -371,7 +392,7 @@ class ApprovalAutoApproveHandler(dingtalk_stream.EventHandler):
 
         # ── 过滤4：审批人校验 ──
         if ACTIONER_USER_ID and current_approver and current_approver != ACTIONER_USER_ID:
-            self.logger.info("非当前审批人(userId=%s)，跳过", current_approver)
+            self.logger.info("非当前审批人(userId/staffId=%s)，跳过", current_approver)
             return AckMessage.STATUS_OK, "OK"
 
         # ── 拉取审批实例详情（用于过滤5 + 通知内容） ──

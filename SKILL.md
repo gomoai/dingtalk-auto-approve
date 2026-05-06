@@ -236,9 +236,9 @@ TARGET_SYSTEM_SOURCE=AI工具账号
 ### 审批判断逻辑（5 层过滤）
 
 1. 审批流代码匹配 `TARGET_PROCESS_CODE`
-2. 状态 == RUNNING 且事件类型 == start
+2. 事件类型 == `start`；若事件携带状态，则状态 == `RUNNING`
 3. 幂等去重（`.approved_state.json` 中已记录）
-4. 当前审批人 == `ACTIONER_USER_ID`
+4. 当前审批人字段（`userId` / `staffId`）== `ACTIONER_USER_ID`
 5. 表单字段"系统来源" == `TARGET_SYSTEM_SOURCE`
 
 ### 兜底自动审批
