@@ -1,0 +1,9 @@
+.env
+.approved_state.json
+.bot.pid
+__pycache__/
+*.pyc
+bot.log
+watchdog.log
+monitor.log
+monitor-backup.log

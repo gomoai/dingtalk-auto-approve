@@ -1,0 +1,11 @@
+.env
+.approved_state.json
+.bot.pid
+__pycache__/
+*.pyc
+*.log
+bot.log
+watchdog.log
+monitor.log
+monitor-backup.log
+dingtalk-bot.service
