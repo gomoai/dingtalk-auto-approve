@@ -3,8 +3,8 @@
 # 用法：bash setup.sh [部署目录]
 # Agent 非交互用法：OPENCLAW_AUTO=1 DINGTALK_APP_KEY=... bash setup.sh [部署目录]
 # 功能：部署后台机器人服务；不是安装 OpenClaw skill 本身。
-#      OpenClaw skill 是本目录，setup.sh 只负责复制运行脚本、配置 .env、
-#      按环境注册 systemd、配置 crontab。
+#      OpenClaw skill 是本目录，setup.sh 只负责复制运行脚本、配置 .env，
+#      并按环境注册 systemd(Linux) 或 launchd(macOS)。
 
 set -e
 
@@ -63,6 +63,72 @@ write_env_from_var() {
     local value="${!key:-}"
     if [ -n "$value" ]; then
         update_env "$key" "$value"
+    fi
+}
+
+write_launch_agent() {
+    local label="$1"
+    local program="$2"
+    local plist="$3"
+    local interval="${4:-}"
+    local keep_alive="${5:-false}"
+
+    cat > "$plist" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$label</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>$program</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>$ABS_DIR</string>
+EOF
+
+    if [ -n "$interval" ]; then
+        cat >> "$plist" << EOF
+    <key>StartInterval</key>
+    <integer>$interval</integer>
+EOF
+    else
+        cat >> "$plist" << EOF
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <$keep_alive/>
+EOF
+    fi
+
+    cat >> "$plist" << EOF
+    <key>StandardOutPath</key>
+    <string>$ABS_DIR/launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>$ABS_DIR/launchd.err.log</string>
+</dict>
+</plist>
+EOF
+}
+
+load_launch_agent() {
+    local plist="$1"
+    local label="$2"
+
+    if ! command -v launchctl >/dev/null 2>&1; then
+        warn "未找到 launchctl，已生成 plist 但未加载: $plist"
+        return
+    fi
+
+    launchctl bootout "gui/$(id -u)" "$plist" >/dev/null 2>&1 || true
+    if launchctl bootstrap "gui/$(id -u)" "$plist" >/dev/null 2>&1; then
+        launchctl enable "gui/$(id -u)/$label" >/dev/null 2>&1 || true
+        launchctl kickstart -k "gui/$(id -u)/$label" >/dev/null 2>&1 || true
+        log "launchd 已加载: $label"
+    else
+        warn "launchd 加载失败，可手动执行: launchctl bootstrap gui/$(id -u) $plist"
     fi
 }
 
@@ -125,6 +191,7 @@ ALERT_WEBHOOK_URL=
 
 # 服务名（通常无需修改）
 SERVICE_NAME=dingtalk-bot.service
+LAUNCHD_LABEL=com.gomoai.dingtalk-auto-approve
 
 # 兜底监控阈值（分钟）
 ALERT_THRESHOLD_MIN=5
@@ -144,6 +211,7 @@ write_env_from_var "ALERT_CHANNEL"
 write_env_from_var "QCLAW_WEBHOOK_URL"
 write_env_from_var "ALERT_WEBHOOK_URL"
 write_env_from_var "SERVICE_NAME"
+write_env_from_var "LAUNCHD_LABEL"
 write_env_from_var "ALERT_THRESHOLD_MIN"
 
 if [ "${OPENCLAW_AUTO:-0}" = "1" ] || [ ! -t 0 ]; then
@@ -174,7 +242,7 @@ if [ -n "$ACTIONER_USER_ID_INPUT" ]; then
     log "审批执行人已更新: $ACTIONER_USER_ID_INPUT"
 fi
 
-# ── Step 7: 注册 systemd 服务（仅 Linux + systemd + root） ──
+# ── Step 7: 注册常驻服务（Linux 用 systemd，macOS 用 launchd） ──
 SERVICE_FILE="/etc/systemd/system/dingtalk-bot.service"
 ABS_DIR="$(abs_path "$DEPLOY_DIR")"
 SERVICE_TEMPLATE="$DEPLOY_DIR/dingtalk-bot.service"
@@ -197,9 +265,20 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-if [ "$(uname -s)" != "Linux" ] || ! command -v systemctl >/dev/null 2>&1; then
-    warn "当前环境不是 Linux/systemd，已跳过 systemd 注册"
-    warn "服务模板已生成: $SERVICE_TEMPLATE"
+OS_NAME="$(uname -s)"
+if [ "$OS_NAME" = "Darwin" ]; then
+    LAUNCH_AGENT_DIR="$HOME/Library/LaunchAgents"
+    mkdir -p "$LAUNCH_AGENT_DIR"
+
+    BOT_LABEL="${LAUNCHD_LABEL:-com.gomoai.dingtalk-auto-approve}"
+    BOT_PLIST="$LAUNCH_AGENT_DIR/$BOT_LABEL.plist"
+    write_launch_agent "$BOT_LABEL" "$ABS_DIR/watchdog.sh" "$BOT_PLIST" "" "true"
+    load_launch_agent "$BOT_PLIST" "$BOT_LABEL"
+
+    log "macOS launchd 服务已配置: $BOT_PLIST"
+elif [ "$OS_NAME" != "Linux" ] || ! command -v systemctl >/dev/null 2>&1; then
+    warn "当前环境不是 Linux/systemd 或 macOS/launchd，已跳过服务注册"
+    warn "systemd 服务模板已生成: $SERVICE_TEMPLATE"
 elif [ "$(id -u)" != "0" ]; then
     warn "当前不是 root，已跳过写入 $SERVICE_FILE"
     warn "可稍后执行: sudo cp $SERVICE_TEMPLATE $SERVICE_FILE"
@@ -210,7 +289,7 @@ else
     log "systemd 服务已注册: $SERVICE_FILE"
 fi
 
-# ── Step 8: 配置 crontab 监控 ──
+# ── Step 8: 配置定时监控（Linux 用 crontab，macOS 用 launchd StartInterval） ──
 if [ "${OPENCLAW_AUTO:-0}" = "1" ] || [ ! -t 0 ]; then
     SETUP_CRON="${SETUP_CRON:-n}"
 else
@@ -219,25 +298,43 @@ else
     read -r SETUP_CRON
 fi
 if [[ "$SETUP_CRON" =~ ^[Yy]$ ]]; then
-    CRON_5M="*/5 * * * * bash $ABS_DIR/monitor.sh >/dev/null 2>&1"
-    CRON_15M="*/15 * * * * bash $ABS_DIR/monitor-backup.sh >/dev/null 2>&1"
-    
-    # 检查是否已存在
-    if crontab -l 2>/dev/null | grep -q "monitor.sh"; then
-        log "5分钟监控已存在于 crontab"
+    if [ "$OS_NAME" = "Darwin" ]; then
+        LAUNCH_AGENT_DIR="$HOME/Library/LaunchAgents"
+        mkdir -p "$LAUNCH_AGENT_DIR"
+        BASE_LAUNCHD_LABEL="${LAUNCHD_LABEL:-com.gomoai.dingtalk-auto-approve}"
+
+        MONITOR_LABEL="$BASE_LAUNCHD_LABEL.monitor"
+        MONITOR_PLIST="$LAUNCH_AGENT_DIR/$MONITOR_LABEL.plist"
+        write_launch_agent "$MONITOR_LABEL" "$ABS_DIR/monitor.sh" "$MONITOR_PLIST" "300"
+        load_launch_agent "$MONITOR_PLIST" "$MONITOR_LABEL"
+
+        BACKUP_LABEL="$BASE_LAUNCHD_LABEL.monitor-backup"
+        BACKUP_PLIST="$LAUNCH_AGENT_DIR/$BACKUP_LABEL.plist"
+        write_launch_agent "$BACKUP_LABEL" "$ABS_DIR/monitor-backup.sh" "$BACKUP_PLIST" "900"
+        load_launch_agent "$BACKUP_PLIST" "$BACKUP_LABEL"
+
+        log "macOS 定时监控已通过 launchd 配置"
     else
-        (crontab -l 2>/dev/null; echo "$CRON_5M") | crontab -
-        log "5分钟健康监控已添加"
-    fi
-    
-    if crontab -l 2>/dev/null | grep -q "monitor-backup.sh"; then
-        log "15分钟兜底监控已存在于 crontab"
-    else
-        (crontab -l 2>/dev/null; echo "$CRON_15M") | crontab -
-        log "15分钟兜底监控已添加"
+        CRON_5M="*/5 * * * * bash $ABS_DIR/monitor.sh >/dev/null 2>&1"
+        CRON_15M="*/15 * * * * bash $ABS_DIR/monitor-backup.sh >/dev/null 2>&1"
+        
+        # 检查是否已存在
+        if crontab -l 2>/dev/null | grep -q "monitor.sh"; then
+            log "5分钟监控已存在于 crontab"
+        else
+            (crontab -l 2>/dev/null; echo "$CRON_5M") | crontab -
+            log "5分钟健康监控已添加"
+        fi
+        
+        if crontab -l 2>/dev/null | grep -q "monitor-backup.sh"; then
+            log "15分钟兜底监控已存在于 crontab"
+        else
+            (crontab -l 2>/dev/null; echo "$CRON_15M") | crontab -
+            log "15分钟兜底监控已添加"
+        fi
     fi
 else
-    warn "跳过 crontab 配置，可稍后手动添加"
+    warn "跳过定时监控配置，可稍后手动添加"
 fi
 
 # ── Step 9: 生成 .gitignore ──
@@ -268,7 +365,8 @@ echo ""
 echo "2. 确认审批流代码和系统来源正确:"
 echo "   grep -E 'TARGET_PROCESS_CODE|TARGET_SYSTEM_SOURCE|ACTIONER_USER_ID|ALERT_CHANNEL' $DEPLOY_DIR/.env"
 echo ""
-echo "3. 在 Linux/systemd 上启动服务:"
+echo "3. 启动/查看服务:"
+echo "   macOS: launchctl print gui/$(id -u)/\${LAUNCHD_LABEL:-com.gomoai.dingtalk-auto-approve}"
 echo "   sudo systemctl daemon-reload"
 echo "   sudo systemctl enable dingtalk-bot"
 echo "   sudo systemctl start dingtalk-bot"

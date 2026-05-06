@@ -9,3 +9,4 @@ watchdog.log
 monitor.log
 monitor-backup.log
 dingtalk-bot.service
+com.gomoai.dingtalk-auto-approve*.plist

@@ -22,7 +22,7 @@ description: >
 2. 校验仓库结构：必须存在 `SKILL.md`、`scripts/setup.sh`、`scripts/approval_bot.py`。
 3. 只向用户询问必要参数，不让用户手动编辑文件。
 4. 使用非交互模式运行 `scripts/setup.sh`，由环境变量写入 `.env`。
-5. 在 Linux + systemd 环境中注册/启动服务并配置 crontab 监控。
+5. 按运行环境注册服务：Linux 使用 systemd + crontab；macOS 使用 launchd。
 6. 执行健康检查，给出部署结果、日志路径和后续维护命令。
 
 ## 必问参数
@@ -45,6 +45,7 @@ TARGET_SYSTEM_SOURCE=AI工具账号
 ALERT_CHANNEL=dingtalk
 ALERT_THRESHOLD_MIN=5
 SERVICE_NAME=dingtalk-bot.service
+LAUNCHD_LABEL=com.gomoai.dingtalk-auto-approve
 ```
 
 如用户要求 QClaw/微信或 webhook 告警，再询问：
@@ -78,13 +79,16 @@ cd dingtalk-auto-approve
 
 ### 2. 确认部署环境
 
-正式常驻部署优先使用 Linux + systemd。macOS 只适合生成配置、本地检查或调试，不应承诺开机自启。
+正式常驻部署支持两类环境：
 
-如果当前不是 Linux/systemd：
+- Linux + systemd：注册 `dingtalk-bot.service`，使用 crontab 跑健康监控和兜底监控。
+- macOS + launchd：注册用户级 `LaunchAgent`，登录后自动拉起机器人，并用 `StartInterval` 跑监控。
+
+如果当前既不是 Linux/systemd 也不是 macOS/launchd：
 
 - 可以继续生成运行目录和 `.env`
-- 跳过 systemd 注册
-- 告知用户需要在 Linux 服务器上执行正式部署
+- 跳过服务注册
+- 告知用户需要在 Linux 或 macOS 机器上执行正式部署
 
 ### 3. 非交互部署后台服务
 
@@ -118,7 +122,7 @@ bash scripts/setup.sh ~/dingtalk-auto-approve
 
 ### 4. 启动服务
 
-如果 `setup.sh` 已成功写入 systemd 服务文件，执行：
+Linux/systemd：
 
 ```bash
 sudo systemctl daemon-reload
@@ -133,15 +137,42 @@ sudo systemctl status dingtalk-bot.service
 sudo cp ~/dingtalk-auto-approve/dingtalk-bot.service /etc/systemd/system/dingtalk-bot.service
 ```
 
+macOS/launchd：
+
+```bash
+launchctl print gui/$(id -u)/com.gomoai.dingtalk-auto-approve
+launchctl kickstart -k gui/$(id -u)/com.gomoai.dingtalk-auto-approve
+```
+
+`setup.sh` 会生成并加载这些用户级 LaunchAgent：
+
+```text
+~/Library/LaunchAgents/com.gomoai.dingtalk-auto-approve.plist
+~/Library/LaunchAgents/com.gomoai.dingtalk-auto-approve.monitor.plist
+~/Library/LaunchAgents/com.gomoai.dingtalk-auto-approve.monitor-backup.plist
+```
+
 ### 5. 验收
 
 部署后检查：
 
 ```bash
 python3 -m py_compile ~/dingtalk-auto-approve/approval_bot.py
-sudo systemctl is-active dingtalk-bot.service
 tail -n 50 ~/dingtalk-auto-approve/bot.log
 bash ~/dingtalk-auto-approve/monitor.sh
+```
+
+Linux 额外检查：
+
+```bash
+sudo systemctl is-active dingtalk-bot.service
+```
+
+macOS 额外检查：
+
+```bash
+launchctl print gui/$(id -u)/com.gomoai.dingtalk-auto-approve
+pgrep -f approval_bot.py
 ```
 
 成功后告诉用户：
@@ -150,7 +181,8 @@ bash ~/dingtalk-auto-approve/monitor.sh
 - 配置文件：`~/dingtalk-auto-approve/.env`
 - 应用日志：`~/dingtalk-auto-approve/bot.log`
 - 守护日志：`~/dingtalk-auto-approve/watchdog.log`
-- 服务命令：`systemctl status/restart dingtalk-bot.service`
+- Linux 服务命令：`systemctl status/restart dingtalk-bot.service`
+- macOS 服务命令：`launchctl print/kickstart gui/$(id -u)/com.gomoai.dingtalk-auto-approve`
 
 ## 人工部署 fallback
 
@@ -182,6 +214,7 @@ systemctl restart dingtalk-bot   # 重启
 journalctl -u dingtalk-bot -f    # 查看实时日志
 tail -f ~/dingtalk-auto-approve/bot.log      # 应用日志
 tail -f ~/dingtalk-auto-approve/watchdog.log # 守护日志
+tail -f ~/dingtalk-auto-approve/launchd.log  # macOS launchd 输出
 ```
 
 ## 自定义
@@ -216,5 +249,5 @@ TARGET_SYSTEM_SOURCE=AI工具账号
 - **安全**：`.env` 包含密钥，确保不被公开访问
 - **权限**：钉钉应用必须有 `qyapi_aflow_execute` 权限，否则审批 API 调用会失败
 - **幂等**：`.approved_state.json` 保存已审批记录，防止重复处理
-- **部署环境**：systemd 注册仅适用于 Linux；macOS 可用于本地调试和生成配置
+- **部署环境**：Linux 使用 systemd；macOS 使用 launchd 用户级 LaunchAgent
 - **告警通道**：默认通过钉钉工作通知告警，QClaw/微信告警作为 webhook 可选集成
