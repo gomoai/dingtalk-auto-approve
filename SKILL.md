@@ -25,6 +25,13 @@ description: >
 5. 按运行环境注册服务：Linux 使用 systemd + crontab；macOS 使用 launchd。
 6. 执行健康检查，给出部署结果、日志路径和后续维护命令。
 
+重要：审批 Stream bot 必须作为系统常驻服务运行。
+
+- Linux 必须使用 systemd 托管 `watchdog.sh` / `approval_bot.py`
+- macOS 必须使用 launchd 托管 `watchdog.sh` / `approval_bot.py`
+- 不要用 OpenClaw 自身 cron/定时任务周期性启动 `approval_bot.py`
+- cron / launchd `StartInterval` 只用于 `monitor.sh` 和 `monitor-backup.sh`
+
 ## 必问参数
 
 部署前向用户收集：
@@ -84,6 +91,8 @@ cd dingtalk-auto-approve
 
 - Linux + systemd：注册 `dingtalk-bot.service`，使用 crontab 跑健康监控和兜底监控。
 - macOS + launchd：注册用户级 `LaunchAgent`，登录后自动拉起机器人，并用 `StartInterval` 跑监控。
+
+`approval_bot.py` 是钉钉 Stream 长连接监听器，必须持续在线。OpenClaw 自身定时任务只能用于触发安装、巡检或卸载流程，不能作为主 bot 的运行方式。
 
 如果当前既不是 Linux/systemd 也不是 macOS/launchd：
 

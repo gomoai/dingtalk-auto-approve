@@ -19,6 +19,15 @@ OpenClaw/Agent 会读取 `SKILL.md`，询问必要参数，然后自动部署后
 - 支持健康监控和兜底自动审批
 - 支持 macOS `launchd` 和 Linux `systemd`
 
+## 运行方式要求
+
+审批机器人依赖钉钉 Stream 长连接，必须常驻运行。
+
+- Linux：使用 `systemd` 托管主进程
+- macOS：使用 `launchd` 托管主进程
+- 定时任务只用于健康检查和兜底审批
+- 不要用 OpenClaw 自身 cron/定时任务周期性启动主 bot
+
 ## 目录关系
 
 这个仓库本身是 skill 源码，不是运行目录。
