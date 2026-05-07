@@ -285,12 +285,13 @@ elif [ "$OS_NAME" != "Linux" ] || ! command -v systemctl >/dev/null 2>&1; then
     warn "systemd 服务模板已生成: $SERVICE_TEMPLATE"
 elif [ "$(id -u)" != "0" ]; then
     warn "当前不是 root，已跳过写入 $SERVICE_FILE"
-    warn "可稍后执行: sudo cp $SERVICE_TEMPLATE $SERVICE_FILE"
-elif [ -f "$SERVICE_FILE" ]; then
-    warn "systemd 服务已存在，跳过创建。模板已更新: $SERVICE_TEMPLATE"
+    warn "可稍后执行: sudo cp $SERVICE_TEMPLATE $SERVICE_FILE && sudo systemctl daemon-reload && sudo systemctl enable dingtalk-bot.service && sudo systemctl restart dingtalk-bot.service"
 else
     cp "$SERVICE_TEMPLATE" "$SERVICE_FILE"
-    log "systemd 服务已注册: $SERVICE_FILE"
+    systemctl daemon-reload
+    systemctl enable dingtalk-bot.service
+    systemctl restart dingtalk-bot.service
+    log "systemd 服务已注册、开机自启并启动: $SERVICE_FILE"
 fi
 
 # ── Step 8: 配置定时监控（Linux 用 crontab，macOS 用 launchd StartInterval） ──

@@ -134,10 +134,12 @@ bash scripts/setup.sh ~/dingtalk-auto-approve
 
 Linux/systemd：
 
+`setup.sh` 在 root 环境下会自动复制 systemd unit、执行 `daemon-reload`、`enable` 和 `restart`。如果需要手动确认或补执行：
+
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable dingtalk-bot.service
-sudo systemctl start dingtalk-bot.service
+sudo systemctl restart dingtalk-bot.service
 sudo systemctl status dingtalk-bot.service
 ```
 
@@ -145,6 +147,9 @@ sudo systemctl status dingtalk-bot.service
 
 ```bash
 sudo cp ~/dingtalk-auto-approve/dingtalk-bot.service /etc/systemd/system/dingtalk-bot.service
+sudo systemctl daemon-reload
+sudo systemctl enable dingtalk-bot.service
+sudo systemctl restart dingtalk-bot.service
 ```
 
 macOS/launchd：

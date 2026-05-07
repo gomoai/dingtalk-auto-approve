@@ -130,6 +130,7 @@ macOS：
 Linux：
 
 - 使用 `systemd` 托管机器人
+- root 环境安装时会自动 `enable` 并 `restart` 服务，确保当前启动和开机自启
 - 使用 `crontab` 运行健康监控和兜底监控
 
 ## 安全说明
