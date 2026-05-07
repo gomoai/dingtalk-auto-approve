@@ -54,6 +54,46 @@ OpenClaw 应只向你询问必要参数：
 - 通知接收人 `userId`
 - 是否启用 QClaw / webhook 告警
 
+## 前置：创建钉钉应用/机器人
+
+如果你还没有钉钉应用，可先参考腾讯云文档中的“创建钉钉机器人”步骤：
+
+- [企业 AI 智能体管控台 ClawPro 接入钉钉指南](https://cloud.tencent.com/document/product/213/129177)
+
+完成后记录以下参数：
+
+- `AppKey` / `Client ID`
+- `AppSecret` / `Client Secret`
+- `AgentId`
+
+注意：腾讯云文档主要覆盖“创建并接入钉钉机器人”的前置步骤。本项目还需要额外开通工作流/审批相关权限，否则机器人可以启动，但无法自动审批。
+
+## 钉钉权限要求
+
+在钉钉开发者后台为应用开通以下权限：
+
+1. **Stream 事件订阅**
+   - 事件：审批任务变更 `bpms_task_change`
+   - 用途：实时接收审批任务事件
+
+2. **工作流实例执行权限**
+   - 权限码：`qyapi_aflow_execute`
+   - API：`POST /v1.0/workflow/processInstances/execute`
+   - 用途：自动同意审批
+   - 注意：这个权限在普通“权限管理”页面通常搜不到，需要通过 [ExecuteProcessInstance API Explorer](https://open.dingtalk.com/document/api/explore/explorer-page?devType=org&api=workflow_1.0%23ExecuteProcessInstance) 申请开通
+
+3. **工作流实例读权限**
+   - API：`/topapi/processinstance/get`
+   - 用途：读取审批单详情、表单字段、申请人和系统来源
+
+4. **工作流实例列表/查询权限**
+   - API：`/topapi/processinstance/listids`
+   - 用途：兜底扫描历史 `RUNNING` 审批单
+
+5. **工作通知发送权限**
+   - API：`/topapi/message/corpconversation/asyncsend_v2`
+   - 用途：发送审批成功、失败和兜底告警通知
+
 ## 手动部署
 
 如果不通过 OpenClaw，也可以手动部署后台服务：
