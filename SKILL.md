@@ -31,6 +31,8 @@ description: >
 - macOS 必须使用 launchd 托管 `watchdog.sh` / `approval_bot.py`
 - 不要用 OpenClaw 自身 cron/定时任务周期性启动 `approval_bot.py`
 - cron / launchd `StartInterval` 只用于 `monitor.sh` 和 `monitor-backup.sh`
+- `approval_bot.py` 必须写入 `.bot_heartbeat`；`monitor.sh` 必须检查心跳过期并重启服务
+- `watchdog.sh` 连续启动失败时必须通过 `send-alert.py` 主动告警
 
 ## 必问参数
 
@@ -52,6 +54,9 @@ TARGET_SYSTEM_SOURCE=AI工具账号
 ALERT_CHANNEL=dingtalk
 ALERT_THRESHOLD_MIN=5
 BACKUP_AUTO_APPROVE=true
+HEARTBEAT_INTERVAL=60
+HEARTBEAT_MAX_AGE=180
+WATCHDOG_ALERT_INTERVAL=300
 SERVICE_NAME=dingtalk-bot.service
 LAUNCHD_LABEL=com.gomoai.dingtalk-auto-approve
 ```
@@ -71,6 +76,8 @@ ALERT_WEBHOOK_URL=通用 webhook 地址
 ```
 
 `ACTIONER_USER_ID` 必须是审批任务的当前处理人；`NOTIFY_USER_ID` 只负责接收通知，可以与审批执行人相同，也可以不同。
+
+`ALERT_CHANNEL` 支持逗号分隔的 fallback，例如 `dingtalk,qclaw` 表示先尝试钉钉工作通知，失败后再尝试 QClaw/webhook。
 
 ## Agent 自动部署流程
 
@@ -93,6 +100,8 @@ cd dingtalk-auto-approve
 - macOS + launchd：注册用户级 `LaunchAgent`，登录后自动拉起机器人，并用 `StartInterval` 跑监控。
 
 `approval_bot.py` 是钉钉 Stream 长连接监听器，必须持续在线。OpenClaw 自身定时任务只能用于触发安装、巡检或卸载流程，不能作为主 bot 的运行方式。
+
+健康监控不仅要检查进程是否存在，还要检查 `.bot_heartbeat` 是否新鲜。进程存在但心跳超过 `HEARTBEAT_MAX_AGE` 也视为异常，需要重启服务并告警。
 
 如果当前既不是 Linux/systemd 也不是 macOS/launchd：
 

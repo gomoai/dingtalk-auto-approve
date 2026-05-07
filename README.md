@@ -28,6 +28,8 @@ OpenClaw/Agent 会读取 `SKILL.md`，询问必要参数，然后自动部署后
 - 定时任务只用于健康检查和兜底审批
 - 不要用 OpenClaw 自身 cron/定时任务周期性启动主 bot
 
+健康监控会同时检查进程和 `.bot_heartbeat` 心跳文件。如果进程存在但心跳过期，`monitor.sh` 会重启服务并发送告警。`watchdog.sh` 在 bot 连续启动失败时也会主动告警。
+
 ## 目录关系
 
 这个仓库本身是 skill 源码，不是运行目录。
@@ -62,6 +64,14 @@ OpenClaw 应只向你询问必要参数：
 - 审批执行人 `userId`
 - 通知接收人 `userId`
 - 是否启用 QClaw / webhook 告警
+
+告警通道支持 fallback，例如：
+
+```env
+ALERT_CHANNEL=dingtalk,qclaw
+```
+
+表示先尝试钉钉工作通知，失败后再尝试 QClaw/webhook。
 
 ## 前置：创建钉钉应用/机器人
 
@@ -141,6 +151,7 @@ Linux：
 - `.approved_state.json`
 - `*.log`
 - `.bot.pid`
+- `.bot_heartbeat`
 - `dingtalk-bot.service`
 - `*.plist`
 
@@ -153,5 +164,6 @@ Linux：
 - `scripts/setup.sh`: 后台服务部署脚本
 - `scripts/monitor.sh`: 健康监控
 - `scripts/monitor-backup.sh`: 兜底自动审批，处理早于 bot 启动时间的存量 RUNNING 审批单
+- `scripts/send-alert.py`: 告警发送工具，支持多通道 fallback
 - `references/config-template.env`: 配置模板
 - `references/dingtalk-permissions.md`: 钉钉权限说明

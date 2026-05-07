@@ -5,6 +5,7 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENV_FILE="$SCRIPT_DIR/.env"
 LOGFILE="$SCRIPT_DIR/monitor.log"
+ALERT_SCRIPT="$SCRIPT_DIR/send-alert.py"
 
 if [ -f "$ENV_FILE" ]; then
     set -a
@@ -16,6 +17,8 @@ fi
 OS_NAME="$(uname -s)"
 SERVICE="${SERVICE_NAME:-dingtalk-bot.service}"
 LAUNCHD_LABEL="${LAUNCHD_LABEL:-com.gomoai.dingtalk-auto-approve}"
+HEARTBEAT_FILE="${HEARTBEAT_FILE:-$SCRIPT_DIR/.bot_heartbeat}"
+HEARTBEAT_MAX_AGE="${HEARTBEAT_MAX_AGE:-180}"
 
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$LOGFILE"
@@ -23,55 +26,24 @@ log() {
 
 send_alert() {
     local message="$1"
-    ALERT_MESSAGE="$message" python3 << 'PYEOF'
-import json
+    if [ -x "$ALERT_SCRIPT" ]; then
+        ALERT_MESSAGE="$message" "$ALERT_SCRIPT" >> "$SCRIPT_DIR/send-alert.log" 2>&1 || true
+    else
+        log "告警脚本不存在，跳过发送: $ALERT_SCRIPT"
+    fi
+}
+
+heartbeat_age() {
+    python3 - "$HEARTBEAT_FILE" << 'PYEOF'
 import os
 import sys
-import urllib.request
+import time
 
-channel = os.environ.get("ALERT_CHANNEL", "dingtalk").lower()
-message = os.environ.get("ALERT_MESSAGE", "")
-
-def post_json(url, body, headers=None):
-    data = json.dumps(body, ensure_ascii=False).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers=headers or {"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-try:
-    if channel in ("", "none"):
-        sys.exit(0)
-    if channel == "dingtalk":
-        app_key = os.environ.get("DINGTALK_APP_KEY", "")
-        app_secret = os.environ.get("DINGTALK_APP_SECRET", "")
-        agent_id = int(os.environ.get("DINGTALK_AGENT_ID", "0") or "0")
-        notify_user_id = os.environ.get("NOTIFY_USER_ID", "")
-        if not app_key or not app_secret or not agent_id or not notify_user_id:
-            print("WARN: 钉钉告警配置不完整，跳过发送")
-            sys.exit(0)
-        token_url = f"https://oapi.dingtalk.com/gettoken?appkey={app_key}&appsecret={app_secret}"
-        with urllib.request.urlopen(token_url, timeout=10) as resp:
-            token_result = json.loads(resp.read().decode("utf-8"))
-        token = token_result.get("access_token")
-        if not token:
-            print(f"WARN: 获取钉钉 token 失败: {token_result}")
-            sys.exit(0)
-        url = f"https://oapi.dingtalk.com/topapi/message/corpconversation/asyncsend_v2?access_token={token}"
-        post_json(url, {
-            "agent_id": agent_id,
-            "userid_list": notify_user_id,
-            "msg": {"msgtype": "text", "text": {"content": message}},
-        })
-    elif channel in ("qclaw", "webhook"):
-        webhook_url = os.environ.get("QCLAW_WEBHOOK_URL") or os.environ.get("ALERT_WEBHOOK_URL", "")
-        if not webhook_url:
-            print("WARN: webhook 告警地址未配置，跳过发送")
-            sys.exit(0)
-        post_json(webhook_url, {"text": message, "content": message})
-    else:
-        print(f"WARN: 未知 ALERT_CHANNEL={channel}，跳过发送")
-except Exception as exc:
-    print(f"WARN: 告警发送失败: {exc}")
+path = sys.argv[1]
+if not os.path.exists(path):
+    print(-1)
+else:
+    print(int(time.time() - os.path.getmtime(path)))
 PYEOF
 }
 
@@ -133,6 +105,36 @@ if [ -z "$BOT_PID" ]; then
         send_alert "$ALERT"
         exit 0
     fi
+fi
+
+AGE="$(heartbeat_age)"
+if [ "$AGE" -lt 0 ] || [ "$AGE" -gt "$HEARTBEAT_MAX_AGE" ]; then
+    if [ "$AGE" -lt 0 ]; then
+        REASON="心跳文件不存在: $HEARTBEAT_FILE"
+    else
+        REASON="心跳过期: ${AGE}s > ${HEARTBEAT_MAX_AGE}s"
+    fi
+    log "$REASON，尝试重启服务..."
+    restart_service
+    sleep 10
+    NEW_AGE="$(heartbeat_age)"
+    if [ "$NEW_AGE" -ge 0 ] && [ "$NEW_AGE" -le "$HEARTBEAT_MAX_AGE" ]; then
+        ALERT="审批机器人心跳异常，已自动重启恢复
+原因: $REASON
+当前心跳年龄: ${NEW_AGE}s"
+        echo "$ALERT"
+        send_alert "$ALERT"
+        exit 0
+    fi
+
+    ALERT="审批机器人心跳异常，自动重启后仍未恢复
+原因: $REASON
+请检查: $(service_status_hint)
+bot 日志: tail $SCRIPT_DIR/bot.log
+watchdog 日志: tail $SCRIPT_DIR/watchdog.log"
+    echo "$ALERT"
+    send_alert "$ALERT"
+    exit 1
 fi
 
 log "bot 运行中, PID: $BOT_PID"

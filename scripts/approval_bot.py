@@ -25,6 +25,7 @@ import os
 import time
 import json
 import logging
+import threading
 from typing import Tuple
 from pathlib import Path
 from urllib import request as urllib_req
@@ -44,7 +45,10 @@ ACTIONER_USER_ID = ""
 NOTIFY_USER_ID = ""
 
 # 幂等持久化文件
-STATE_FILE = Path(__file__).resolve().parent / ".approved_state.json"
+SCRIPT_DIR = Path(__file__).resolve().parent
+STATE_FILE = SCRIPT_DIR / ".approved_state.json"
+HEARTBEAT_FILE = SCRIPT_DIR / ".bot_heartbeat"
+HEARTBEAT_INTERVAL = 60
 
 # ============================================================
 # 配置加载（只读一次 .env）
@@ -78,7 +82,28 @@ def load_config() -> dict:
         "target_system_source": os.environ.get("TARGET_SYSTEM_SOURCE", TARGET_SYSTEM_SOURCE),
         "actioner_user_id": os.environ.get("ACTIONER_USER_ID", ""),
         "notify_user_id": os.environ.get("NOTIFY_USER_ID", ""),
+        "heartbeat_interval": _parse_int(os.environ.get("HEARTBEAT_INTERVAL", "60"), 60),
     }
+
+
+def write_heartbeat(logger=None):
+    """写入心跳时间戳，供 monitor.sh 检测卡死进程。"""
+    try:
+        HEARTBEAT_FILE.write_text(str(int(time.time())))
+    except Exception as e:
+        if logger:
+            logger.warning("写入心跳失败: %s", e)
+
+
+def start_heartbeat_thread(logger):
+    def loop():
+        while True:
+            write_heartbeat(logger)
+            time.sleep(max(10, HEARTBEAT_INTERVAL))
+
+    thread = threading.Thread(target=loop, name="heartbeat", daemon=True)
+    thread.start()
+    logger.info("心跳线程已启动: %s，每 %s 秒写入一次", HEARTBEAT_FILE, HEARTBEAT_INTERVAL)
 
 
 # ============================================================
@@ -483,11 +508,12 @@ def main():
     if not config["actioner_user_id"]:
         raise ValueError("请配置 ACTIONER_USER_ID")
 
-    global TARGET_PROCESS_CODE, TARGET_SYSTEM_SOURCE, ACTIONER_USER_ID, NOTIFY_USER_ID
+    global TARGET_PROCESS_CODE, TARGET_SYSTEM_SOURCE, ACTIONER_USER_ID, NOTIFY_USER_ID, HEARTBEAT_INTERVAL
     TARGET_PROCESS_CODE = config["process_code"]
     TARGET_SYSTEM_SOURCE = config["target_system_source"]
     ACTIONER_USER_ID = config["actioner_user_id"]
     NOTIFY_USER_ID = config["notify_user_id"]
+    HEARTBEAT_INTERVAL = config["heartbeat_interval"]
 
     # 加载持久化状态
     state = ApprovedState(STATE_FILE)
@@ -500,6 +526,8 @@ def main():
     logger.info("通知接收人: %s", NOTIFY_USER_ID or "未配置")
     logger.info("已加载审批记录: %d 条", len(state))
     logger.info("=" * 50)
+    write_heartbeat(logger)
+    start_heartbeat_thread(logger)
 
     credential = dingtalk_stream.Credential(config["app_key"], config["app_secret"])
     client = dingtalk_stream.DingTalkStreamClient(credential)

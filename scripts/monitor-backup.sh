@@ -229,26 +229,49 @@ def is_manually_approved(detail):
             return True
     return False
 
+def iter_alert_channels():
+    for channel in ALERT_CHANNEL.replace(";", ",").split(","):
+        channel = channel.strip().lower()
+        if channel:
+            yield channel
+
 def send_alert(token, message):
-    if ALERT_CHANNEL in ("", "none"):
-        return
-    if ALERT_CHANNEL == "dingtalk":
-        if not token or not NOTIFY_USER_ID or not AGENT_ID:
-            print("WARN: 钉钉告警配置不完整，跳过发送")
+    errors = []
+    for channel in iter_alert_channels():
+        if channel == "none":
             return
-        url = f"https://oapi.dingtalk.com/topapi/message/corpconversation/asyncsend_v2?access_token={token}"
-        return post_json(url, {
-            "agent_id": AGENT_ID,
-            "userid_list": NOTIFY_USER_ID,
-            "msg": {"msgtype": "text", "text": {"content": message}},
-        })
-    if ALERT_CHANNEL in ("qclaw", "webhook"):
+        try:
+            if channel == "dingtalk":
+                send_dingtalk_alert(token, message)
+            elif channel in ("qclaw", "webhook"):
+                send_webhook_alert(message, channel)
+            else:
+                raise RuntimeError(f"未知 ALERT_CHANNEL={channel}")
+            print(f"OK: 告警已通过 {channel} 发送")
+            return
+        except Exception as exc:
+            errors.append(f"{channel}: {exc}")
+    if errors:
+        raise RuntimeError("所有告警通道均发送失败: " + " | ".join(errors))
+
+def send_dingtalk_alert(token, message):
+    if not token or not NOTIFY_USER_ID or not AGENT_ID:
+        raise RuntimeError("钉钉告警配置不完整")
+    url = f"https://oapi.dingtalk.com/topapi/message/corpconversation/asyncsend_v2?access_token={token}"
+    return post_json(url, {
+        "agent_id": AGENT_ID,
+        "userid_list": NOTIFY_USER_ID,
+        "msg": {"msgtype": "text", "text": {"content": message}},
+    })
+
+def send_webhook_alert(message, channel):
+    if channel == "qclaw":
         webhook_url = os.environ.get("QCLAW_WEBHOOK_URL") or os.environ.get("ALERT_WEBHOOK_URL", "")
-        if not webhook_url:
-            print("WARN: webhook 告警地址未配置，跳过发送")
-            return
-        return post_json(webhook_url, {"text": message, "content": message})
-    print(f"WARN: 未知 ALERT_CHANNEL={ALERT_CHANNEL}，跳过发送")
+    else:
+        webhook_url = os.environ.get("ALERT_WEBHOOK_URL") or os.environ.get("QCLAW_WEBHOOK_URL", "")
+    if not webhook_url:
+        raise RuntimeError(f"{channel} webhook 地址未配置")
+    return post_json(webhook_url, {"text": message, "content": message})
 
 if not PROCESS_CODE:
     print("ERROR: 请配置 TARGET_PROCESS_CODE")

@@ -148,7 +148,8 @@ cp "$SCRIPT_DIR/approval_bot.py" "$DEPLOY_DIR/"
 cp "$SCRIPT_DIR/watchdog.sh" "$DEPLOY_DIR/"
 cp "$SCRIPT_DIR/monitor.sh" "$DEPLOY_DIR/"
 cp "$SCRIPT_DIR/monitor-backup.sh" "$DEPLOY_DIR/"
-chmod +x "$DEPLOY_DIR/watchdog.sh" "$DEPLOY_DIR/monitor.sh" "$DEPLOY_DIR/monitor-backup.sh"
+cp "$SCRIPT_DIR/send-alert.py" "$DEPLOY_DIR/"
+chmod +x "$DEPLOY_DIR/watchdog.sh" "$DEPLOY_DIR/monitor.sh" "$DEPLOY_DIR/monitor-backup.sh" "$DEPLOY_DIR/send-alert.py"
 log "脚本文件已复制"
 
 # ── Step 4: 安装 Python 依赖 ──
@@ -184,7 +185,7 @@ ACTIONER_USER_ID=
 DINGTALK_AGENT_ID=
 NOTIFY_USER_ID=
 
-# 告警通道：dingtalk / qclaw / webhook / none
+# 告警通道：dingtalk / qclaw / webhook / none，可用逗号配置 fallback，例如 dingtalk,qclaw
 ALERT_CHANNEL=dingtalk
 QCLAW_WEBHOOK_URL=
 ALERT_WEBHOOK_URL=
@@ -198,6 +199,11 @@ ALERT_THRESHOLD_MIN=5
 
 # 兜底监控是否自动补审批；设为 false 时只告警
 BACKUP_AUTO_APPROVE=true
+
+# bot 心跳；monitor.sh 会在心跳过期时重启服务并告警
+HEARTBEAT_INTERVAL=60
+HEARTBEAT_MAX_AGE=180
+WATCHDOG_ALERT_INTERVAL=300
 EOF
     log ".env 模板已生成，请编辑填入凭证和审批配置"
 fi
@@ -217,6 +223,9 @@ write_env_from_var "SERVICE_NAME"
 write_env_from_var "LAUNCHD_LABEL"
 write_env_from_var "ALERT_THRESHOLD_MIN"
 write_env_from_var "BACKUP_AUTO_APPROVE"
+write_env_from_var "HEARTBEAT_INTERVAL"
+write_env_from_var "HEARTBEAT_MAX_AGE"
+write_env_from_var "WATCHDOG_ALERT_INTERVAL"
 
 if [ "${OPENCLAW_AUTO:-0}" = "1" ] || [ ! -t 0 ]; then
     log "已按环境变量写入配置，跳过交互输入"
@@ -354,6 +363,8 @@ bot.log
 watchdog.log
 monitor.log
 monitor-backup.log
+send-alert.log
+.bot_heartbeat
 EOF
     log ".gitignore 已生成"
 fi
