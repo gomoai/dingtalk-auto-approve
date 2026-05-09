@@ -1,6 +1,8 @@
-# DingTalk Auto Approve OpenClaw Skill
+# DingTalk Auto Approve Deployment Skill
 
-这是一个 OpenClaw skill 仓库，用于部署和维护钉钉审批自动通过机器人。
+这是一个部署型 OpenClaw skill 仓库，用于部署和维护钉钉审批自动通过机器人。
+
+它不是把审批长连接直接跑在 OpenClaw 内部的插件。OpenClaw/Agent 负责读取 `SKILL.md` 和 `openclaw.skill.json`，完成参数收集、安装、诊断、升级和卸载；真正处理审批的是目标机器上的独立常驻后台服务。
 
 用户可以把本仓库地址交给 OpenClaw：
 
@@ -9,6 +11,20 @@ https://github.com/gomoai/dingtalk-auto-approve
 ```
 
 OpenClaw/Agent 会读取 `SKILL.md`，询问必要参数，然后自动部署后台机器人服务。
+
+## Skill 形态
+
+本仓库提供一组标准生命周期入口，便于 OpenClaw/Agent 机器读取和调用：
+
+| 动作 | 入口 | 用途 |
+| --- | --- | --- |
+| install | `scripts/install.sh` | 安装运行服务，内部调用 `setup.sh` |
+| status | `scripts/status.sh` | 查看服务、进程、心跳和日志路径 |
+| doctor | `scripts/doctor.sh` | 诊断配置、依赖、服务管理器和可选钉钉 token |
+| upgrade | `scripts/upgrade.sh` | 重新部署脚本，保留 `.env` 和状态文件 |
+| uninstall | `scripts/uninstall.sh` | 移除服务注册，可选择保留运行数据 |
+
+机器可读元数据在 `openclaw.skill.json`，配置字段说明在 `references/config-schema.json`。
 
 ## 它做什么
 
@@ -37,7 +53,7 @@ OpenClaw/Agent 会读取 `SKILL.md`，询问必要参数，然后自动部署后
 ```text
 GitHub skill 仓库
   ↓ OpenClaw clone / load
-SKILL.md
+SKILL.md / openclaw.skill.json
   ↓ 指导 Agent 收集参数并执行部署
 ~/dingtalk-auto-approve
   ↓ 后台机器人运行目录
@@ -120,7 +136,7 @@ ALERT_CHANNEL=dingtalk,qclaw
 ```bash
 git clone https://github.com/gomoai/dingtalk-auto-approve
 cd dingtalk-auto-approve
-bash scripts/setup.sh ~/dingtalk-auto-approve
+bash scripts/install.sh ~/dingtalk-auto-approve
 ```
 
 然后配置：
@@ -160,10 +176,18 @@ Linux：
 ## 关键文件
 
 - `SKILL.md`: OpenClaw/Agent 执行协议
+- `openclaw.skill.json`: 部署型 skill 元数据和动作入口
 - `scripts/approval_bot.py`: 钉钉审批机器人
 - `scripts/setup.sh`: 后台服务部署脚本
+- `scripts/install.sh`: 标准安装入口
+- `scripts/status.sh`: 标准状态检查入口
+- `scripts/doctor.sh`: 标准诊断入口
+- `scripts/upgrade.sh`: 标准升级入口
+- `scripts/uninstall.sh`: 标准卸载入口
 - `scripts/monitor.sh`: 健康监控
 - `scripts/monitor-backup.sh`: 兜底自动审批，处理早于 bot 启动时间的存量 RUNNING 审批单
 - `scripts/send-alert.py`: 告警发送工具，支持多通道 fallback
 - `references/config-template.env`: 配置模板
+- `references/config-schema.json`: 机器可读配置 schema
 - `references/dingtalk-permissions.md`: 钉钉权限说明
+- `examples/`: OpenClaw、Linux、macOS 和告警配置示例

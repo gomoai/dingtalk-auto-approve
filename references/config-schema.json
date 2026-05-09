@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DingTalk Auto Approve Runtime Configuration",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "DINGTALK_APP_KEY",
+    "DINGTALK_APP_SECRET",
+    "DINGTALK_AGENT_ID",
+    "TARGET_PROCESS_CODE",
+    "ACTIONER_USER_ID",
+    "NOTIFY_USER_ID"
+  ],
+  "properties": {
+    "DINGTALK_APP_KEY": {
+      "type": "string",
+      "description": "DingTalk application AppKey / Client ID.",
+      "sensitive": true
+    },
+    "DINGTALK_APP_SECRET": {
+      "type": "string",
+      "description": "DingTalk application AppSecret / Client Secret.",
+      "sensitive": true
+    },
+    "DINGTALK_AGENT_ID": {
+      "type": "integer",
+      "description": "DingTalk application AgentId used for work notifications."
+    },
+    "TARGET_PROCESS_CODE": {
+      "type": "string",
+      "description": "DingTalk approval process code to auto-approve."
+    },
+    "TARGET_SYSTEM_SOURCE": {
+      "type": "string",
+      "default": "AI工具账号",
+      "description": "Form field value used to identify eligible approval requests."
+    },
+    "ACTIONER_USER_ID": {
+      "type": "string",
+      "description": "UserId that must be the current approval task handler."
+    },
+    "NOTIFY_USER_ID": {
+      "type": "string",
+      "description": "UserId that receives success and failure notifications."
+    },
+    "ALERT_CHANNEL": {
+      "type": "string",
+      "default": "dingtalk",
+      "description": "Comma-separated alert channels, for example dingtalk,qclaw.",
+      "examples": ["dingtalk", "dingtalk,qclaw", "webhook", "none"]
+    },
+    "QCLAW_WEBHOOK_URL": {
+      "type": "string",
+      "description": "Optional QClaw webhook URL.",
+      "sensitive": true
+    },
+    "ALERT_WEBHOOK_URL": {
+      "type": "string",
+      "description": "Optional generic alert webhook URL.",
+      "sensitive": true
+    },
+    "SERVICE_NAME": {
+      "type": "string",
+      "default": "dingtalk-bot.service",
+      "description": "Linux systemd service name."
+    },
+    "LAUNCHD_LABEL": {
+      "type": "string",
+      "default": "com.gomoai.dingtalk-auto-approve",
+      "description": "macOS launchd label prefix."
+    },
+    "ALERT_THRESHOLD_MIN": {
+      "type": "integer",
+      "default": 5,
+      "description": "Minutes before backup monitor treats a RUNNING approval as stuck."
+    },
+    "BACKUP_AUTO_APPROVE": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether the backup monitor should auto-approve eligible stuck requests."
+    },
+    "HEARTBEAT_INTERVAL": {
+      "type": "integer",
+      "default": 60,
+      "description": "Seconds between heartbeat writes from approval_bot.py."
+    },
+    "HEARTBEAT_MAX_AGE": {
+      "type": "integer",
+      "default": 180,
+      "description": "Maximum heartbeat age before monitor.sh restarts the service."
+    },
+    "WATCHDOG_ALERT_INTERVAL": {
+      "type": "integer",
+      "default": 300,
+      "description": "Minimum seconds between repeated watchdog failure alerts."
+    }
+  }
+}

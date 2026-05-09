@@ -149,7 +149,12 @@ cp "$SCRIPT_DIR/watchdog.sh" "$DEPLOY_DIR/"
 cp "$SCRIPT_DIR/monitor.sh" "$DEPLOY_DIR/"
 cp "$SCRIPT_DIR/monitor-backup.sh" "$DEPLOY_DIR/"
 cp "$SCRIPT_DIR/send-alert.py" "$DEPLOY_DIR/"
-chmod +x "$DEPLOY_DIR/watchdog.sh" "$DEPLOY_DIR/monitor.sh" "$DEPLOY_DIR/monitor-backup.sh" "$DEPLOY_DIR/send-alert.py"
+cp "$SCRIPT_DIR/install.sh" "$DEPLOY_DIR/"
+cp "$SCRIPT_DIR/status.sh" "$DEPLOY_DIR/"
+cp "$SCRIPT_DIR/doctor.sh" "$DEPLOY_DIR/"
+cp "$SCRIPT_DIR/uninstall.sh" "$DEPLOY_DIR/"
+cp "$SCRIPT_DIR/upgrade.sh" "$DEPLOY_DIR/"
+chmod +x "$DEPLOY_DIR/watchdog.sh" "$DEPLOY_DIR/monitor.sh" "$DEPLOY_DIR/monitor-backup.sh" "$DEPLOY_DIR/send-alert.py" "$DEPLOY_DIR/install.sh" "$DEPLOY_DIR/status.sh" "$DEPLOY_DIR/doctor.sh" "$DEPLOY_DIR/uninstall.sh" "$DEPLOY_DIR/upgrade.sh"
 log "脚本文件已复制"
 
 # ── Step 4: 安装 Python 依赖 ──

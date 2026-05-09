@@ -10,18 +10,18 @@ description: >
 
 # 钉钉审批自动通过技能
 
-这是一个 OpenClaw skill 仓库。用户可以只把 Git 仓库地址交给 OpenClaw；Agent 应自动 clone/加载本 skill，并在必要时向用户提问，随后部署和维护钉钉审批自动通过后台服务。
+这是一个部署型 OpenClaw skill 仓库。用户可以只把 Git 仓库地址交给 OpenClaw；Agent 应自动 clone/加载本 skill，并在必要时向用户提问，随后部署和维护钉钉审批自动通过后台服务。
 
-`SKILL.md` 是给 Agent 的执行协议；`scripts/setup.sh` 部署的是后台机器人运行服务，不是安装 OpenClaw skill 本身。后台服务默认部署到 `~/dingtalk-auto-approve` 或用户指定目录。
+`SKILL.md` 是给 Agent 的执行协议；`openclaw.skill.json` 是机器可读的部署型 skill 元数据；`scripts/setup.sh` 部署的是后台机器人运行服务，不是把 bot 嵌入 OpenClaw 进程。后台服务默认部署到 `~/dingtalk-auto-approve` 或用户指定目录。
 
 ## 自动化目标
 
 当用户说“用这个仓库部署钉钉自动审批”“安装这个 skill”“部署这个 Git 仓库”等类似请求时，Agent 应完成全流程：
 
 1. 获取仓库地址并 clone 到本地临时目录或 OpenClaw skills 目录。
-2. 校验仓库结构：必须存在 `SKILL.md`、`scripts/setup.sh`、`scripts/approval_bot.py`。
+2. 校验仓库结构：必须存在 `SKILL.md`、`openclaw.skill.json`、`scripts/install.sh`、`scripts/approval_bot.py`。
 3. 只向用户询问必要参数，不让用户手动编辑文件。
-4. 使用非交互模式运行 `scripts/setup.sh`，由环境变量写入 `.env`。
+4. 使用非交互模式运行 `scripts/install.sh`，由环境变量写入 `.env`。
 5. 按运行环境注册服务：Linux 使用 systemd + crontab；macOS 使用 launchd。
 6. 执行健康检查，给出部署结果、日志路径和后续维护命令。
 
@@ -33,6 +33,20 @@ description: >
 - cron / launchd `StartInterval` 只用于 `monitor.sh` 和 `monitor-backup.sh`
 - `approval_bot.py` 必须写入 `.bot_heartbeat`；`monitor.sh` 必须检查心跳过期并重启服务
 - `watchdog.sh` 连续启动失败时必须通过 `send-alert.py` 主动告警
+
+## 标准动作入口
+
+Agent 应优先使用这些稳定入口，而不是临时拼接底层命令：
+
+| 动作 | 命令 | 说明 |
+| --- | --- | --- |
+| install | `bash scripts/install.sh <deploy-dir>` | 安装后台服务，内部调用 `setup.sh` |
+| status | `bash <deploy-dir>/status.sh` | 查看服务、进程、心跳和日志路径 |
+| doctor | `bash <deploy-dir>/doctor.sh` | 诊断配置、依赖和服务管理器 |
+| upgrade | `bash scripts/upgrade.sh <deploy-dir>` | 从当前 skill 仓库重新部署脚本，保留运行数据 |
+| uninstall | `FORCE=1 bash <deploy-dir>/uninstall.sh` | 移除服务注册和运行目录 |
+
+如需要保留运行目录，卸载时使用 `FORCE=1 KEEP_DATA=1 bash <deploy-dir>/uninstall.sh`。
 
 ## 必问参数
 
@@ -124,7 +138,7 @@ TARGET_SYSTEM_SOURCE='AI工具账号' \
 ACTIONER_USER_ID='<actioner-user-id>' \
 NOTIFY_USER_ID='<notify-user-id>' \
 ALERT_CHANNEL='dingtalk' \
-bash scripts/setup.sh ~/dingtalk-auto-approve
+bash scripts/install.sh ~/dingtalk-auto-approve
 ```
 
 如启用 QClaw：
@@ -134,7 +148,7 @@ OPENCLAW_AUTO=1 \
 SETUP_CRON=y \
 ALERT_CHANNEL='qclaw' \
 QCLAW_WEBHOOK_URL='<qclaw-webhook-url>' \
-bash scripts/setup.sh ~/dingtalk-auto-approve
+bash scripts/install.sh ~/dingtalk-auto-approve
 ```
 
 注意：实际执行时应把全部必填参数放在同一次命令环境中；不要把密钥打印到最终回复。
@@ -183,8 +197,8 @@ launchctl kickstart -k gui/$(id -u)/com.gomoai.dingtalk-auto-approve
 ```bash
 python3 -m py_compile ~/dingtalk-auto-approve/approval_bot.py
 tail -n 50 ~/dingtalk-auto-approve/bot.log
-bash ~/dingtalk-auto-approve/monitor.sh
-bash ~/dingtalk-auto-approve/monitor-backup.sh
+bash ~/dingtalk-auto-approve/status.sh
+bash ~/dingtalk-auto-approve/doctor.sh
 ```
 
 Linux 额外检查：
@@ -214,7 +228,7 @@ pgrep -f approval_bot.py
 仅当自动部署不可用时，再指导用户手动执行：
 
 ```bash
-bash scripts/setup.sh ~/dingtalk-auto-approve
+bash scripts/install.sh ~/dingtalk-auto-approve
 ```
 
 ## 钉钉应用权限配置

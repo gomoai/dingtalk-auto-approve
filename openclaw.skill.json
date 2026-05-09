@@ -1,0 +1,65 @@
+{
+  "schemaVersion": "1.0",
+  "name": "dingtalk-auto-approve",
+  "title": "DingTalk Auto Approve",
+  "type": "deployment-skill",
+  "description": "Deploy and maintain a DingTalk Stream approval auto-approve service.",
+  "version": "0.1.0",
+  "entrypoint": "SKILL.md",
+  "runtime": {
+    "kind": "external-service",
+    "defaultDeployDir": "~/dingtalk-auto-approve",
+    "requiresLongRunningService": true,
+    "serviceManagers": {
+      "linux": "systemd",
+      "darwin": "launchd"
+    },
+    "scheduler": {
+      "linux": "crontab",
+      "darwin": "launchd StartInterval"
+    }
+  },
+  "actions": {
+    "install": "scripts/install.sh",
+    "status": "scripts/status.sh",
+    "doctor": "scripts/doctor.sh",
+    "uninstall": "scripts/uninstall.sh",
+    "upgrade": "scripts/upgrade.sh"
+  },
+  "configSchema": "references/config-schema.json",
+  "requiredSecrets": [
+    "DINGTALK_APP_KEY",
+    "DINGTALK_APP_SECRET"
+  ],
+  "requiredConfig": [
+    "DINGTALK_AGENT_ID",
+    "TARGET_PROCESS_CODE",
+    "ACTIONER_USER_ID",
+    "NOTIFY_USER_ID"
+  ],
+  "optionalConfig": [
+    "TARGET_SYSTEM_SOURCE",
+    "ALERT_CHANNEL",
+    "QCLAW_WEBHOOK_URL",
+    "ALERT_WEBHOOK_URL",
+    "ALERT_THRESHOLD_MIN",
+    "BACKUP_AUTO_APPROVE",
+    "HEARTBEAT_INTERVAL",
+    "HEARTBEAT_MAX_AGE",
+    "WATCHDOG_ALERT_INTERVAL",
+    "SERVICE_NAME",
+    "LAUNCHD_LABEL"
+  ],
+  "safety": {
+    "doNotCommit": [
+      ".env",
+      ".approved_state.json",
+      "*.log",
+      ".bot.pid",
+      ".bot_heartbeat",
+      "dingtalk-bot.service",
+      "*.plist"
+    ],
+    "mainBotMustNotRunFromCron": true
+  }
+}
