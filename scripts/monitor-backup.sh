@@ -136,29 +136,78 @@ def is_approve_success(result):
         return True
     return False
 
-def find_task_id(value):
-    """从审批详情里尽量提取当前 RUNNING 任务的 taskId。"""
+RUNNING_STATES = {"RUNNING", "NEW", "TODO", "PENDING", "PROCESSING", "WAITING"}
+DONE_RESULTS = {"AGREE", "REFUSE", "TERMINATE", "TERMINATED", "CANCEL", "CANCELED", "REJECT", "PASS"}
+
+def _to_upper_text(value):
+    return str(value).strip().upper() if value is not None else ""
+
+def _to_text(value):
+    return str(value).strip() if value is not None else ""
+
+def collect_task_candidates(value, out):
+    """递归收集审批详情中的 task 候选节点。"""
     if isinstance(value, dict):
-        status = str(value.get("status", value.get("taskStatus", value.get("state", "")))).upper()
-        result = str(value.get("result", value.get("operation_result", ""))).upper()
-        looks_running = status in ("RUNNING", "NEW", "TODO", "PENDING") or result in ("", "NONE")
+        task_id = None
         for key in ("taskId", "taskid", "task_id", "activityId", "activity_id"):
-            task_id = value.get(key)
-            if task_id and looks_running:
-                try:
-                    return int(task_id)
-                except (TypeError, ValueError):
-                    return None
+            raw = value.get(key)
+            if raw in (None, ""):
+                continue
+            try:
+                task_id = int(raw)
+                break
+            except (TypeError, ValueError):
+                task_id = None
+        if task_id:
+            status = _to_upper_text(value.get("status", value.get("taskStatus", value.get("state", ""))))
+            result = _to_upper_text(value.get("result", value.get("operation_result", "")))
+            user_ids = set()
+            for key in (
+                "userId", "userid", "staffId", "staffid", "staff_id",
+                "approverUserId", "approver_userid", "actionerUserId", "actioner_userid",
+            ):
+                uid = _to_text(value.get(key))
+                if uid:
+                    user_ids.add(uid)
+            out.append({
+                "task_id": task_id,
+                "status": status,
+                "result": result,
+                "user_ids": user_ids,
+            })
         for child in value.values():
-            task_id = find_task_id(child)
-            if task_id:
-                return task_id
+            collect_task_candidates(child, out)
     elif isinstance(value, list):
         for child in value:
-            task_id = find_task_id(child)
-            if task_id:
-                return task_id
-    return None
+            collect_task_candidates(child, out)
+
+def find_running_task(detail, expected_user_id=""):
+    """从审批详情中提取可执行任务（RUNNING + 未结束 + 尽量匹配审批人）。"""
+    candidates = []
+    collect_task_candidates(detail, candidates)
+    if not candidates:
+        return None, []
+
+    running = []
+    for c in candidates:
+        status = c["status"]
+        result = c["result"]
+        status_running = status in RUNNING_STATES
+        # 某些返回不带 status/result，保守认为可能是待办；但若明确已结束则排除。
+        status_unknown = (not status and result in ("", "NONE"))
+        if (status_running or status_unknown) and result not in DONE_RESULTS:
+            running.append(c)
+
+    if not running:
+        return None, candidates
+
+    if expected_user_id:
+        for c in running:
+            if expected_user_id in c["user_ids"]:
+                return c["task_id"], running
+        return None, running
+
+    return running[0]["task_id"], running
 
 def parse_form_summary(form_values):
     lines = []
@@ -339,6 +388,8 @@ for inst_id in instances:
         wait_minutes = 0
 
     if wait_minutes >= ALERT_THRESHOLD_MIN:
+        task_id, running_tasks = find_running_task(detail, ACTIONER_USER_ID)
+        running_approvers = sorted({uid for task in running_tasks for uid in task["user_ids"] if uid})
         item = {
             "instance_id": inst_id,
             "title": title,
@@ -347,10 +398,18 @@ for inst_id in instances:
             "wait_minutes": wait_minutes,
             "create_time": create_time_str,
             "form_summary": parse_form_summary(form_values),
-            "task_id": find_task_id(detail),
+            "task_id": task_id,
+            "running_task_approvers": running_approvers,
         }
         if not BACKUP_AUTO_APPROVE:
             alert_only.append(item)
+            continue
+
+        if ACTIONER_USER_ID and not task_id:
+            item["approve_error"] = (
+                f"跳过自动通过：未找到 ACTIONER_USER_ID={ACTIONER_USER_ID} 的可执行 RUNNING 任务"
+            )
+            failed.append(item)
             continue
 
         try:
@@ -393,6 +452,8 @@ if pending_alerts:
         alert_lines.append(f"创建时间: {s['create_time']}")
         if s.get("task_id"):
             alert_lines.append(f"任务ID: {s['task_id']}")
+        if s.get("running_task_approvers"):
+            alert_lines.append(f"当前待办审批人候选: {', '.join(s['running_task_approvers'])}")
         if s.get("approve_result"):
             alert_lines.append(f"审批 API 返回: {json.dumps(s['approve_result'], ensure_ascii=False)}")
         if s.get("approve_error"):
