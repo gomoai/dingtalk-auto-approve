@@ -209,6 +209,17 @@ def find_running_task(detail, expected_user_id=""):
 
     return running[0]["task_id"], running
 
+def is_actioner_in_approval_chain(detail, actioner_user_id):
+    """检查 actioner 是否出现在审批链任意任务中，避免无关审批单误告警。"""
+    if not actioner_user_id:
+        return True
+    all_tasks = []
+    collect_task_candidates(detail, all_tasks)
+    for task in all_tasks:
+        if actioner_user_id in task["user_ids"]:
+            return True
+    return False
+
 def parse_form_summary(form_values):
     lines = []
     for item in form_values:
@@ -406,6 +417,8 @@ for inst_id in instances:
             continue
 
         if ACTIONER_USER_ID and not task_id:
+            if not is_actioner_in_approval_chain(detail, ACTIONER_USER_ID):
+                continue
             item["approve_error"] = (
                 f"跳过自动通过：未找到 ACTIONER_USER_ID={ACTIONER_USER_ID} 的可执行 RUNNING 任务"
             )
