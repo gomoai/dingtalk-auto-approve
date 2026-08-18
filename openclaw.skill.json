@@ -44,6 +44,7 @@
     "ALERT_WEBHOOK_URL",
     "ALERT_THRESHOLD_MIN",
     "BACKUP_AUTO_APPROVE",
+    "BACKUP_LOOKBACK_HOURS",
     "HEARTBEAT_INTERVAL",
     "HEARTBEAT_MAX_AGE",
     "WATCHDOG_ALERT_INTERVAL",
@@ -54,6 +55,7 @@
     "doNotCommit": [
       ".env",
       ".approved_state.json",
+      ".access_token.json",
       "*.log",
       ".bot.pid",
       ".bot_heartbeat",

@@ -145,6 +145,7 @@ log "部署目录已创建: $DEPLOY_DIR"
 
 # ── Step 3: 复制脚本文件 ──
 cp "$SCRIPT_DIR/approval_bot.py" "$DEPLOY_DIR/"
+cp "$SCRIPT_DIR/dingtalk_client.py" "$DEPLOY_DIR/"
 cp "$SCRIPT_DIR/watchdog.sh" "$DEPLOY_DIR/"
 cp "$SCRIPT_DIR/monitor.sh" "$DEPLOY_DIR/"
 cp "$SCRIPT_DIR/monitor-backup.sh" "$DEPLOY_DIR/"
@@ -205,6 +206,9 @@ ALERT_THRESHOLD_MIN=5
 # 兜底监控是否自动补审批；设为 false 时只告警
 BACKUP_AUTO_APPROVE=true
 
+# 兜底扫描时间窗口（小时，按审批单创建时间；1-168）
+BACKUP_LOOKBACK_HOURS=24
+
 # bot 心跳；monitor.sh 会在心跳过期时重启服务并告警
 HEARTBEAT_INTERVAL=60
 HEARTBEAT_MAX_AGE=180
@@ -228,6 +232,7 @@ write_env_from_var "SERVICE_NAME"
 write_env_from_var "LAUNCHD_LABEL"
 write_env_from_var "ALERT_THRESHOLD_MIN"
 write_env_from_var "BACKUP_AUTO_APPROVE"
+write_env_from_var "BACKUP_LOOKBACK_HOURS"
 write_env_from_var "HEARTBEAT_INTERVAL"
 write_env_from_var "HEARTBEAT_MAX_AGE"
 write_env_from_var "WATCHDOG_ALERT_INTERVAL"
@@ -370,6 +375,7 @@ monitor.log
 monitor-backup.log
 send-alert.log
 .bot_heartbeat
+.access_token.json
 EOF
     log ".gitignore 已生成"
 fi

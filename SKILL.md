@@ -68,6 +68,7 @@ TARGET_SYSTEM_SOURCE=AI工具账号
 ALERT_CHANNEL=dingtalk
 ALERT_THRESHOLD_MIN=5
 BACKUP_AUTO_APPROVE=true
+BACKUP_LOOKBACK_HOURS=24
 HEARTBEAT_INTERVAL=60
 HEARTBEAT_MAX_AGE=180
 WATCHDOG_ALERT_INTERVAL=300
@@ -280,13 +281,15 @@ TARGET_SYSTEM_SOURCE=AI工具账号
 
 ### 兜底自动审批
 
-`monitor-backup.sh` 每 15 分钟查询最近 7 天的目标审批流实例。对满足以下条件的审批单，会自动补执行同意：
+`monitor-backup.sh` 每 15 分钟扫描最近 `BACKUP_LOOKBACK_HOURS` 小时（默认 24）内的目标审批流实例，优先调用新版 listids 并只取 `RUNNING`。对满足以下条件的审批单，会自动补执行同意：
 
 1. 审批单仍是 `RUNNING`
-2. 未出现在 `.approved_state.json`
+2. 未出现在 `.approved_state.json`（已通过、已结束、系统来源不匹配都会被记住，避免重复拉详情）
 3. 表单字段"系统来源" == `TARGET_SYSTEM_SOURCE`
 4. 不是 `ACTIONER_USER_ID` 已手动同意过的单子
 5. 等待时长 >= `ALERT_THRESHOLD_MIN`
+
+token 缓存在 `.access_token.json`，bot / 兜底扫描 / 告警共用，避免每轮都 `/gettoken`。若长时间停机后需要补扫更早的存量单，可临时把 `BACKUP_LOOKBACK_HOURS` 调到最大 168（7 天）。
 
 默认 `BACKUP_AUTO_APPROVE=true`，因此早于 bot 启动时间的存量 RUNNING 单也会被兜底处理。若只想告警不自动审批，在 `.env` 中设置：
 
@@ -303,6 +306,6 @@ BACKUP_AUTO_APPROVE=false
 
 - **安全**：`.env` 包含密钥，确保不被公开访问
 - **权限**：钉钉应用必须有 `qyapi_aflow_execute` 权限，否则审批 API 调用会失败
-- **幂等**：`.approved_state.json` 保存已审批记录，防止重复处理
+- **幂等**：`.approved_state.json` 保存已审批和已确认无需处理的记录，防止重复处理/重复拉详情
 - **部署环境**：Linux 使用 systemd；macOS 使用 launchd 用户级 LaunchAgent
 - **告警通道**：默认通过钉钉工作通知告警，QClaw/微信告警作为 webhook 可选集成

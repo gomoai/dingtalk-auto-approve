@@ -1,5 +1,6 @@
 .env
 .approved_state.json
+.access_token.json
 .bot.pid
 .bot_heartbeat
 __pycache__/

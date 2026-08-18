@@ -5,34 +5,21 @@
 import json
 import os
 import sys
-import urllib.request
+from urllib import request as urllib_req
+
+from dingtalk_client import get_access_token, send_work_notification
 
 
 def post_json(url, body, headers=None):
     data = json.dumps(body, ensure_ascii=False).encode("utf-8")
-    req = urllib.request.Request(
+    req = urllib_req.Request(
         url,
         data=data,
         headers=headers or {"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with urllib_req.urlopen(req, timeout=10) as resp:
         return json.loads(resp.read().decode("utf-8"))
-
-
-def get_dingtalk_token():
-    app_key = os.environ.get("DINGTALK_APP_KEY", "")
-    app_secret = os.environ.get("DINGTALK_APP_SECRET", "")
-    if not app_key or not app_secret:
-        raise RuntimeError("DINGTALK_APP_KEY/DINGTALK_APP_SECRET 未配置")
-
-    token_url = f"https://oapi.dingtalk.com/gettoken?appkey={app_key}&appsecret={app_secret}"
-    with urllib.request.urlopen(token_url, timeout=10) as resp:
-        token_result = json.loads(resp.read().decode("utf-8"))
-    token = token_result.get("access_token")
-    if not token:
-        raise RuntimeError(f"获取钉钉 token 失败: {token_result}")
-    return token
 
 
 def send_dingtalk(message):
@@ -41,16 +28,11 @@ def send_dingtalk(message):
     if not agent_id or not notify_user_id:
         raise RuntimeError("DINGTALK_AGENT_ID/NOTIFY_USER_ID 未配置")
 
-    token = get_dingtalk_token()
-    url = f"https://oapi.dingtalk.com/topapi/message/corpconversation/asyncsend_v2?access_token={token}"
-    return post_json(
-        url,
-        {
-            "agent_id": agent_id,
-            "userid_list": notify_user_id,
-            "msg": {"msgtype": "text", "text": {"content": message}},
-        },
+    token = get_access_token(
+        os.environ.get("DINGTALK_APP_KEY", ""),
+        os.environ.get("DINGTALK_APP_SECRET", ""),
     )
+    return send_work_notification(token, agent_id, notify_user_id, "", message)
 
 
 def send_webhook(message, channel):

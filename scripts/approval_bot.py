@@ -28,12 +28,16 @@ import logging
 import threading
 from typing import Tuple
 from pathlib import Path
-from urllib import request as urllib_req
-from urllib import error as urllib_error
-import urllib.parse
 
 import dingtalk_stream
 from dingtalk_stream import AckMessage
+
+from dingtalk_client import (
+    execute_approve,
+    get_access_token,
+    get_process_instance,
+    send_work_notification,
+)
 
 # ============================================================
 # 配置区
@@ -185,82 +189,6 @@ def setup_logger():
 
 
 # ============================================================
-# 钉钉 API 调用
-# ============================================================
-def api_get_access_token(app_key: str, app_secret: str) -> str:
-    """获取钉钉 access_token"""
-    url = f"https://oapi.dingtalk.com/gettoken?appkey={app_key}&appsecret={app_secret}"
-    req = urllib_req.Request(url, method="GET")
-    with urllib_req.urlopen(req, timeout=10) as resp:
-        result = json.loads(resp.read().decode("utf-8"))
-        if result.get("errcode") == 0:
-            return result["access_token"]
-        raise RuntimeError(f"获取 token 失败: {result}")
-
-
-def api_get_process_instance(access_token: str, process_instance_id: str) -> dict:
-    """获取审批实例详情（申请人、表单内容等）"""
-    url = f"https://oapi.dingtalk.com/topapi/processinstance/get?access_token={access_token}"
-    body = urllib.parse.urlencode({"process_instance_id": process_instance_id}).encode()
-    req = urllib_req.Request(url, data=body, method="POST")
-    with urllib_req.urlopen(req, timeout=10) as resp:
-        result = json.loads(resp.read().decode("utf-8"))
-        if result.get("errcode") != 0:
-            raise RuntimeError(f"获取审批实例失败: {result}")
-        return result.get("process_instance", {})
-
-
-def api_execute_approve(access_token: str, process_instance_id: str,
-                        remark: str = "自动通过", result: str = "agree",
-                        task_id: int = None, actioner_user_id: str = "") -> dict:
-    """执行审批同意/拒绝（新版 API）
-    
-    API: POST /v1.0/workflow/processInstances/execute
-    需要权限: qyapi_aflow_execute
-    """
-    url = "https://api.dingtalk.com/v1.0/workflow/processInstances/execute"
-    body_data = {
-        "processInstanceId": process_instance_id,
-        "remark": remark,
-        "result": result,  # "agree" 或 "refuse"
-        "actionerUserId": actioner_user_id,
-    }
-    if task_id:
-        body_data["taskId"] = task_id
-    
-    body = json.dumps(body_data).encode()
-    req = urllib_req.Request(url, data=body, headers={
-        "x-acs-dingtalk-access-token": access_token,
-        "Content-Type": "application/json"
-    }, method="POST")
-    try:
-        with urllib_req.urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib_error.HTTPError as exc:
-        error_body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"审批执行 API 失败: HTTP {exc.code} {exc.reason}: {error_body}") from exc
-
-
-def api_send_work_notification(access_token: str, agent_id: int, 
-                                user_id: str, title: str, content: str) -> dict:
-    """发送工作通知到指定用户"""
-    if not user_id:
-        return {"errcode": -1, "errmsg": "NOTIFY_USER_ID 未配置"}
-    url = f"https://oapi.dingtalk.com/topapi/message/corpconversation/asyncsend_v2?access_token={access_token}"
-    body = json.dumps({
-        "agent_id": agent_id,
-        "userid_list": user_id,
-        "msg": {
-            "msgtype": "text",
-            "text": {"content": f"{title}\n{content}"},
-        },
-    }).encode()
-    req = urllib_req.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
-    with urllib_req.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-
-# ============================================================
 # 表单解析
 # ============================================================
 def get_form_field(form_values: list, field_name: str) -> str:
@@ -343,18 +271,12 @@ class ApprovalAutoApproveHandler(dingtalk_stream.EventHandler):
         self.app_key = app_key
         self.app_secret = app_secret
         self._token = None
-        self._token_expire = 0
         self._state = state
         self._agent_id = agent_id
 
     def _get_token(self) -> str:
-        """获取并缓存 access_token"""
-        now = time.time()
-        if self._token and now < self._token_expire:
-            return self._token
-        self._token = api_get_access_token(self.app_key, self.app_secret)
-        self._token_expire = now + 7000
-        self.logger.info("access_token 已刷新")
+        """获取并缓存 access_token（进程间共享文件缓存）"""
+        self._token = get_access_token(self.app_key, self.app_secret, logger=self.logger)
         return self._token
 
     @staticmethod
@@ -423,7 +345,7 @@ class ApprovalAutoApproveHandler(dingtalk_stream.EventHandler):
         # ── 拉取审批实例详情（用于过滤5 + 通知内容） ──
         try:
             token = self._get_token()
-            instance = api_get_process_instance(token, instance_id)
+            instance = get_process_instance(token, instance_id)
         except Exception as e:
             self.logger.warning("获取审批实例详情失败: %s，跳过", e)
             return AckMessage.STATUS_OK, "OK"
@@ -445,7 +367,7 @@ class ApprovalAutoApproveHandler(dingtalk_stream.EventHandler):
         self.logger.info("✅ 全部条件满足，执行自动通过: %s (申请人: %s, 系统来源: %s)", 
                          title, applicant, system_source)
         try:
-            result = api_execute_approve(
+            result = execute_approve(
                 token,
                 instance_id,
                 remark="自动通过",
@@ -485,7 +407,7 @@ class ApprovalAutoApproveHandler(dingtalk_stream.EventHandler):
             self.logger.warning("NOTIFY_USER_ID 未配置，跳过通知发送")
             return
         try:
-            result = api_send_work_notification(token, self._agent_id, NOTIFY_USER_ID, title, content)
+            result = send_work_notification(token, self._agent_id, NOTIFY_USER_ID, title, content)
             if result.get("errcode") == 0:
                 self.logger.info("📩 通知已发送: %s", title)
             else:

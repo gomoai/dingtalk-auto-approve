@@ -79,6 +79,13 @@
       "default": true,
       "description": "Whether the backup monitor should auto-approve eligible stuck requests."
     },
+    "BACKUP_LOOKBACK_HOURS": {
+      "type": "integer",
+      "default": 24,
+      "minimum": 1,
+      "maximum": 168,
+      "description": "How many hours of created approval instances the backup monitor scans. Uses instance create time."
+    },
     "HEARTBEAT_INTERVAL": {
       "type": "integer",
       "default": 60,

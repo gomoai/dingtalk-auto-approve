@@ -1,6 +1,6 @@
 #!/bin/bash
 # 审批兜底监控 - 每 15 分钟运行一次
-# 检查是否有符合条件的审批单卡住（等待 > 5 分钟未自动通过）
+# 只扫描最近 BACKUP_LOOKBACK_HOURS 小时内仍 RUNNING 的审批单（默认 24 小时）
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ -f "$SCRIPT_DIR/.env" ]; then
@@ -15,15 +15,26 @@ LOGFILE="$SCRIPT_DIR/monitor-backup.log"
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$LOGFILE"; }
 
 SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
-import urllib.error, urllib.request, json, urllib.parse, time, sys, os
+import json, time, sys, os, logging
 from datetime import datetime
+from urllib import request as urllib_request
 
-TOKEN_URL = f"https://oapi.dingtalk.com/gettoken?appkey={os.environ.get('DINGTALK_APP_KEY','')}&appsecret={os.environ.get('DINGTALK_APP_SECRET','')}"
 SCRIPT_DIR = os.environ.get("SCRIPT_DIR", os.getcwd())
+sys.path.insert(0, SCRIPT_DIR)
+from dingtalk_client import (
+    execute_approve,
+    get_access_token,
+    get_process_instance,
+    list_running_instance_ids,
+    send_work_notification,
+)
+
 PROCESS_CODE = os.environ.get("TARGET_PROCESS_CODE", "")
 TARGET_SYSTEM_SOURCE = os.environ.get("TARGET_SYSTEM_SOURCE", "AI工具账号")
 STATE_FILE = os.environ.get("STATE_FILE", os.path.join(SCRIPT_DIR, ".approved_state.json"))
 ALERT_THRESHOLD_MIN = int(os.environ.get("ALERT_THRESHOLD_MIN", "5") or "5")
+BACKUP_LOOKBACK_HOURS = int(os.environ.get("BACKUP_LOOKBACK_HOURS", "24") or "24")
+BACKUP_LOOKBACK_HOURS = max(1, min(BACKUP_LOOKBACK_HOURS, 168))
 BACKUP_AUTO_APPROVE = os.environ.get("BACKUP_AUTO_APPROVE", "true").lower() in ("1", "true", "yes", "y")
 ACTIONER_USER_ID = os.environ.get("ACTIONER_USER_ID", "")
 NOTIFY_USER_ID = os.environ.get("NOTIFY_USER_ID", "")
@@ -32,25 +43,25 @@ ALERT_CHANNEL = os.environ.get("ALERT_CHANNEL", "dingtalk").lower()
 SERVICE_NAME = os.environ.get("SERVICE_NAME", "dingtalk-bot.service")
 LAUNCHD_LABEL = os.environ.get("LAUNCHD_LABEL", "com.gomoai.dingtalk-auto-approve")
 OS_NAME = os.uname().sysname if hasattr(os, "uname") else ""
+LOGGER = logging.getLogger("monitor-backup")
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 def post_json(url, body, headers=None):
     data = json.dumps(body, ensure_ascii=False).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers=headers or {"Content-Type": "application/json"}, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        error_body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"HTTP {exc.code} {exc.reason}: {error_body}") from exc
+    req = urllib_request.Request(url, data=data, headers=headers or {"Content-Type": "application/json"}, method="POST")
+    with urllib_request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 def get_token():
-    if not os.environ.get("DINGTALK_APP_KEY") or not os.environ.get("DINGTALK_APP_SECRET"):
+    app_key = os.environ.get("DINGTALK_APP_KEY", "")
+    app_secret = os.environ.get("DINGTALK_APP_SECRET", "")
+    if not app_key or not app_secret:
         return None
-    with urllib.request.urlopen(TOKEN_URL, timeout=10) as resp:
-        r = json.loads(resp.read().decode())
-        if r.get("errcode") == 0:
-            return r["access_token"]
-    return None
+    try:
+        return get_access_token(app_key, app_secret, logger=LOGGER)
+    except Exception as exc:
+        print(f"ERROR: 无法获取钉钉 token: {exc}")
+        return None
 
 def load_approved():
     """加载 bot 自动通过的记录"""
@@ -84,46 +95,6 @@ def save_approved(instance_id, applicant="", method="手动"):
                 json.dump(data, f, ensure_ascii=False)
         except Exception:
             pass
-
-def get_instances(token, start_ts, end_ts):
-    url = f"https://oapi.dingtalk.com/topapi/processinstance/listids?access_token={token}"
-    data = urllib.parse.urlencode({
-        "process_code": PROCESS_CODE,
-        "start_time": start_ts,
-        "end_time": end_ts,
-        "size": 20,
-    }).encode()
-    req = urllib.request.Request(url, data=data, method="POST")
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        result = json.loads(resp.read().decode())
-        return result.get("result", {}).get("list", [])
-
-def get_instance_detail(token, instance_id):
-    url = f"https://oapi.dingtalk.com/topapi/processinstance/get?access_token={token}"
-    data = urllib.parse.urlencode({"process_instance_id": instance_id}).encode()
-    req = urllib.request.Request(url, data=data, method="POST")
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        result = json.loads(resp.read().decode())
-        return result.get("process_instance", {})
-
-def execute_approve(token, instance_id, task_id=None):
-    """兜底执行审批同意，与 Stream bot 使用同一个新版审批执行 API。"""
-    body = {
-        "processInstanceId": instance_id,
-        "remark": "兜底自动通过",
-        "result": "agree",
-        "actionerUserId": ACTIONER_USER_ID,
-    }
-    if task_id:
-        body["taskId"] = task_id
-    return post_json(
-        "https://api.dingtalk.com/v1.0/workflow/processInstances/execute",
-        body,
-        headers={
-            "x-acs-dingtalk-access-token": token,
-            "Content-Type": "application/json",
-        },
-    )
 
 def is_approve_success(result):
     if result.get("success") is True:
@@ -317,12 +288,10 @@ def send_alert(token, message):
 def send_dingtalk_alert(token, message):
     if not token or not NOTIFY_USER_ID or not AGENT_ID:
         raise RuntimeError("钉钉告警配置不完整")
-    url = f"https://oapi.dingtalk.com/topapi/message/corpconversation/asyncsend_v2?access_token={token}"
-    return post_json(url, {
-        "agent_id": AGENT_ID,
-        "userid_list": NOTIFY_USER_ID,
-        "msg": {"msgtype": "text", "text": {"content": message}},
-    })
+    result = send_work_notification(token, AGENT_ID, NOTIFY_USER_ID, "", message)
+    if result.get("errcode") not in (0, None):
+        raise RuntimeError(f"钉钉告警发送失败: {result}")
+    return result
 
 def send_webhook_alert(message, channel):
     if channel == "qclaw":
@@ -347,44 +316,50 @@ if not token:
 
 approved = load_approved()
 now = time.time()
-
-# 查询最近 7 天的实例
-start_ts = int((now - 604800) * 1000)
+start_ts = int((now - BACKUP_LOOKBACK_HOURS * 3600) * 1000)
 end_ts = int(now * 1000)
 
-instances = get_instances(token, start_ts, end_ts)
+instances, used_running_filter = list_running_instance_ids(
+    token, PROCESS_CODE, start_ts, end_ts, logger=LOGGER
+)
+if not used_running_filter:
+    print("WARN: RUNNING 过滤接口不可用，已回退旧版 listids")
 failed = []
 alert_only = []
 approved_by_backup = []
+fetched = 0
+skipped_state = 0
+skipped_remembered = 0
 
 for inst_id in instances:
-    # 已自动通过的跳过
     if inst_id in approved:
+        skipped_state += 1
         continue
 
-    detail = get_instance_detail(token, inst_id)
+    detail = get_process_instance(token, inst_id)
+    fetched += 1
     if not detail:
         continue
 
     status = detail.get("status", "")
-    # 只看还在运行中的
-    if status != "RUNNING":
-        continue
-
     form_values = detail.get("form_component_values", [])
     system_source = get_form_field(form_values, "系统来源")
     title = detail.get("title", "")
     applicant = extract_applicant(detail, form_values, title)
     create_time_str = detail.get("create_time", "")
 
-    # 过滤：只检查指定系统来源的审批单
-    if system_source != TARGET_SYSTEM_SOURCE:
+    # 已结束或不匹配的单记住，避免下一轮重复拉详情。
+    if status != "RUNNING":
+        save_approved(inst_id, applicant, "跳过:已结束")
+        skipped_remembered += 1
         continue
-
-    # 检查是否已被当前用户手动通过
+    if system_source != TARGET_SYSTEM_SOURCE:
+        save_approved(inst_id, applicant, "跳过:系统来源不匹配")
+        skipped_remembered += 1
+        continue
     if is_manually_approved(detail):
-        # 手动通过的单子也记录下来，避免重复检查
         save_approved(inst_id, applicant, "手动")
+        skipped_remembered += 1
         continue
 
     # 计算等待时长
@@ -393,7 +368,7 @@ for inst_id in instances:
             ct = datetime.strptime(create_time_str, "%Y-%m-%d %H:%M:%S")
             create_ts = ct.timestamp()
             wait_minutes = int((now - create_ts) / 60)
-        except:
+        except Exception:
             wait_minutes = 0
     else:
         wait_minutes = 0
@@ -426,7 +401,13 @@ for inst_id in instances:
             continue
 
         try:
-            result = execute_approve(token, inst_id, task_id=item["task_id"])
+            result = execute_approve(
+                token,
+                inst_id,
+                remark="兜底自动通过",
+                task_id=item["task_id"],
+                actioner_user_id=ACTIONER_USER_ID,
+            )
             item["approve_result"] = result
             if is_approve_success(result):
                 save_approved(inst_id, applicant, "兜底自动")
@@ -483,8 +464,17 @@ if pending_alerts:
         send_alert(token, alert_msg)
     except Exception as exc:
         print(f"WARN: 告警发送失败: {exc}")
+    print(
+        f"DONE: listed={len(instances)} skipped_state={skipped_state} "
+        f"fetched={fetched} remembered={skipped_remembered} "
+        f"lookback_h={BACKUP_LOOKBACK_HOURS} running_filter={used_running_filter}"
+    )
     sys.exit(1)
 else:
-    print("OK")
+    print(
+        f"OK: listed={len(instances)} skipped_state={skipped_state} "
+        f"fetched={fetched} remembered={skipped_remembered} "
+        f"lookback_h={BACKUP_LOOKBACK_HOURS} running_filter={used_running_filter}"
+    )
     sys.exit(0)
 PYEOF

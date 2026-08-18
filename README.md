@@ -122,8 +122,9 @@ ALERT_CHANNEL=dingtalk,qclaw
    - 用途：读取审批单详情、表单字段、申请人和系统来源
 
 4. **工作流实例列表/查询权限**
-   - API：`/topapi/processinstance/listids`
-   - 用途：兜底扫描历史 `RUNNING` 审批单
+   - API：`/v1.0/workflow/processes/instanceIds/query`（优先，可按 `RUNNING` 过滤）
+   - 兼容：`/topapi/processinstance/listids`
+   - 用途：兜底扫描近期仍在审批中的实例
 
 5. **工作通知发送权限**
    - API：`/topapi/message/corpconversation/asyncsend_v2`
@@ -165,6 +166,7 @@ Linux：
 
 - `.env`
 - `.approved_state.json`
+- `.access_token.json`
 - `*.log`
 - `.bot.pid`
 - `.bot_heartbeat`
@@ -178,6 +180,7 @@ Linux：
 - `SKILL.md`: OpenClaw/Agent 执行协议
 - `openclaw.skill.json`: 部署型 skill 元数据和动作入口
 - `scripts/approval_bot.py`: 钉钉审批机器人
+- `scripts/dingtalk_client.py`: 钉钉 API 与 access_token 文件缓存
 - `scripts/setup.sh`: 后台服务部署脚本
 - `scripts/install.sh`: 标准安装入口
 - `scripts/status.sh`: 标准状态检查入口

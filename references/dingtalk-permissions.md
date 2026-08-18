@@ -35,7 +35,9 @@
 
 ### 3. 工作流实例列表/查询权限
 
-- **用途**：兜底监控查询最近 7 天审批实例（`/topapi/processinstance/listids`），处理 bot 启动前遗漏的 RUNNING 单
+- **用途**：兜底监控查询最近 `BACKUP_LOOKBACK_HOURS` 小时内仍 `RUNNING` 的审批实例
+- **优先 API**：`POST /v1.0/workflow/processes/instanceIds/query`（可按 `statuses=["RUNNING"]` 过滤）
+- **兼容 API**：`/topapi/processinstance/listids`（无状态过滤，仅在新接口不可用时回退）
 
 ### 4. 工作通知发送权限
 
